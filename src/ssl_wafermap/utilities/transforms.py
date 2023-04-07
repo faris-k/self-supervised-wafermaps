@@ -11,6 +11,7 @@ from torchvision.transforms.functional import InterpolationMode
 
 class DieNoise:
     """Adds noise to wafermap die by flipping pass to fail and vice-versa with probability p.
+    Inspired by DOI: 10.1109/ITC50571.2021.00019 (https://ieeexplore.ieee.org/document/9611304)
 
     Parameters
     ----------
@@ -763,6 +764,7 @@ def get_inference_transforms(img_size: List[int] = [224, 224], normalize: bool =
     return T.Compose(transforms)
 
 
+# Inspired by https://github.com/sparks-baird/xtal2png/blob/main/src/xtal2png/utils/data.py#L138
 def rgb_scale(
     X,
     feature_range=[0, 255],
