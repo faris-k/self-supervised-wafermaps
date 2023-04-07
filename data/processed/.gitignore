@@ -2,3 +2,7 @@
 *
 # Except this file
 !.gitignore
+
+# And everything in these directories
+!WM811K/
+!MixedWM38/
