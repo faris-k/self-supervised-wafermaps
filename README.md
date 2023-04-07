@@ -11,7 +11,9 @@
 
 # ssl_wafermap
 
-> Add a short description here!
+*How much can self-supervised models learn about semiconductor data without being told what to look for?*
+
+![Wafers (2)](https://user-images.githubusercontent.com/68213622/230577877-591e7ae2-bdf7-4fee-9333-90d55822ce7a.png)
 
 A longer description of your project goes here...
 
