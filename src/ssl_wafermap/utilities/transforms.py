@@ -287,7 +287,7 @@ def get_base_transforms(
 
     # Optionally normalize
     if normalize:
-        transforms.append(T.Normalize(*NORMALIZE_STATS))
+        transforms.append(T.Normalize(**NORMALIZE_STATS))
 
     return T.Compose(transforms)
 
@@ -441,7 +441,7 @@ class WaferDINOCOllateFunction(MultiViewCollateFunction):
                 base_transform,
                 global_crop,
                 T.ToTensor(),
-                T.Normalize(*NORMALIZE_STATS),
+                T.Normalize(**NORMALIZE_STATS),
             ]
         )
 
@@ -450,7 +450,7 @@ class WaferDINOCOllateFunction(MultiViewCollateFunction):
                 base_transform,
                 local_crop,
                 T.ToTensor(),
-                T.Normalize(*NORMALIZE_STATS),
+                T.Normalize(**NORMALIZE_STATS),
             ]
         )
 
@@ -527,7 +527,7 @@ class WaferMSNCollateFunction(MultiViewCollateFunction):
                     antialias=False,
                 ),
                 T.ToTensor(),
-                T.Normalize(*NORMALIZE_STATS),
+                T.Normalize(**NORMALIZE_STATS),
             ]
         )
         focal_crop = T.Compose(
@@ -540,7 +540,7 @@ class WaferMSNCollateFunction(MultiViewCollateFunction):
                     antialias=False,
                 ),
                 T.ToTensor(),
-                T.Normalize(*NORMALIZE_STATS),
+                T.Normalize(**NORMALIZE_STATS),
             ]
         )
 
@@ -581,7 +581,7 @@ class WaferMAECollateFunction(MultiViewCollateFunction):
             T.RandomHorizontalFlip(hf_prob),
             T.Grayscale(num_output_channels=3),
             T.ToTensor(),
-            T.Normalize(*NORMALIZE_STATS),
+            T.Normalize(**NORMALIZE_STATS),
         ]
 
         super().__init__([T.Compose(transforms)])
@@ -759,7 +759,7 @@ def get_inference_transforms(img_size: List[int] = [224, 224], normalize: bool =
     ]
 
     if normalize:
-        transforms.append(T.Normalize(*NORMALIZE_STATS))
+        transforms.append(T.Normalize(**NORMALIZE_STATS))
 
     return T.Compose(transforms)
 

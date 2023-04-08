@@ -39,7 +39,7 @@ logs_root_dir = "../models/mixed_wm38_pretrain"
 
 num_workers = 2  # os.cpu_count()
 
-subset = False  # Whether to train using a subset of the dataset
+subset = True  # Whether to train using a subset of the dataset
 max_epochs = 5 if subset else 150
 input_size = 224
 
@@ -47,7 +47,7 @@ input_size = 224
 distributed = False
 
 # Set to True to enable Mixed Precision training.
-use_amp = True
+use_amp = False
 
 # Set to True to enable Synchronized Batch Norm (requires distributed=True).
 # If enabled the batch norm is calculated over all gpus, otherwise the batch
@@ -131,8 +131,8 @@ def get_data_loader(batch_size: int, model):
 
 
 class DINOViT(pl.LightningModule):
-    def __init__(self, dataloader_kNN=None, num_classes=9, **kwargs):
-        super().__init__(dataloader_kNN, num_classes, **kwargs)
+    def __init__(self):
+        super().__init__()
         self.backbone = torch.hub.load(
             "facebookresearch/dino:main", "dino_vits16", pretrained=False
         )
@@ -191,8 +191,8 @@ class DINOViT(pl.LightningModule):
 
 
 class MAE(pl.LightningModule):
-    def __init__(self, dataloader_kNN=None, num_classes=9, **kwargs):
-        super().__init__(dataloader_kNN, num_classes, **kwargs)
+    def __init__(self):
+        super().__init__()
 
         decoder_dim = 512
         vit = torchvision.models.vit_b_32()
@@ -273,8 +273,8 @@ class MAE(pl.LightningModule):
 
 
 class DCLW(pl.LightningModule):
-    def __init__(self, dataloader_kNN=None, num_classes=9, **kwargs):
-        super().__init__(dataloader_kNN, num_classes, **kwargs)
+    def __init__(self):
+        super().__init__()
         # create a ResNet backbone and remove the classification head
         self.backbone = timm.create_model("resnet18", num_classes=0, pretrained=False)
         feature_dim = self.backbone.num_features
@@ -304,8 +304,8 @@ class DCLW(pl.LightningModule):
 
 
 class VICReg(pl.LightningModule):
-    def __init__(self, dataloader_kNN=None, num_classes=9, **kwargs):
-        super().__init__(dataloader_kNN, num_classes, **kwargs)
+    def __init__(self):
+        super().__init__()
         # create a ResNet backbone and remove the classification head
         self.backbone = timm.create_model("resnet18", num_classes=0, pretrained=False)
         feature_dim = self.backbone.num_features
@@ -338,8 +338,8 @@ class VICReg(pl.LightningModule):
 
 
 class BYOL(pl.LightningModule):
-    def __init__(self, dataloader_kNN=None, num_classes=9, **kwargs):
-        super().__init__(dataloader_kNN, num_classes, **kwargs)
+    def __init__(self):
+        super().__init__()
         # create a ResNet backbone and remove the classification head
         self.backbone = timm.create_model("resnet18", num_classes=0, pretrained=False)
         feature_dim = self.backbone.num_features
@@ -438,7 +438,7 @@ def main():
             if experiment_version is None:
                 # Save results of all models under same version directory
                 experiment_version = logger.version
-            checkpoint_callback = pl.callbacks.Checkpoint(
+            checkpoint_callback = pl.callbacks.ModelCheckpoint(
                 dirpath=os.path.join(logger.log_dir, "checkpoints"),
                 every_n_epochs=max_epochs // 10,
             )

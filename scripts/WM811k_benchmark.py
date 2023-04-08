@@ -45,13 +45,13 @@ warnings.filterwarnings("ignore", ".*many workers.*")
 warnings.filterwarnings("ignore", ".*meaningless.*")
 warnings.filterwarnings("ignore", ".*confusion.*")
 
-logs_root_dir = "models/benchmark_logs"
+logs_root_dir = "../models/benchmark_logs"
 
 num_workers = 2  # os.cpu_count()
 memory_bank_size = 4096
 
-subset = False  # Whether to benchmark using a subset of the dataset
-max_epochs = 200 if subset else 150
+subset = True  # Whether to benchmark using a subset of the dataset
+max_epochs = 5 if subset else 150
 knn_k = 5  # sweep of knn_k values leads to best performance at k=5
 knn_t = 0.1
 classes = 9
@@ -93,7 +93,7 @@ else:
 
 if subset:
     # Create a smaller dataset for benchmarking using one of the training splits
-    df = pd.read_pickle("../data/processed/train_20_split.pkl.xz")
+    df = pd.read_pickle("../data/processed/WM811K/train_20_split.pkl.xz")
     X_train, X_val, y_train, y_val = train_test_split(
         df.waferMap,
         df.failureCode,
@@ -104,8 +104,8 @@ if subset:
     del df
 else:
     # Otherwise, use the larger train/val splits
-    df_train = pd.read_pickle("../data/processed/train_split.pkl.xz")
-    df_val = pd.read_pickle("../data/processed/val_data.pkl.xz")
+    df_train = pd.read_pickle("../data/processed/WM811K/train_data.pkl.xz")
+    df_val = pd.read_pickle("../data/processed/WM811K/val_data.pkl.xz")
     X_train, y_train = df_train.waferMap, df_train.failureCode
     X_val, y_val = df_val.waferMap, df_val.failureCode
     del df_train, df_val
@@ -1171,7 +1171,7 @@ def main():
             if experiment_version is None:
                 # Save results of all models under same version directory
                 experiment_version = logger.version
-            checkpoint_callback = pl.callbacks.Checkpoint(
+            checkpoint_callback = pl.callbacks.ModelCheckpoint(
                 dirpath=os.path.join(logger.log_dir, "checkpoints"),
                 every_n_epochs=max_epochs // 10,
             )
