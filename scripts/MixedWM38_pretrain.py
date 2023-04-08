@@ -337,16 +337,79 @@ class VICReg(pl.LightningModule):
         return [optim], [cosine_scheduler]
 
 
+class BYOL(pl.LightningModule):
+    def __init__(self, dataloader_kNN=None, num_classes=9, **kwargs):
+        super().__init__(dataloader_kNN, num_classes, **kwargs)
+        # create a ResNet backbone and remove the classification head
+        self.backbone = timm.create_model("resnet18", num_classes=0, pretrained=False)
+        feature_dim = self.backbone.num_features
+
+        # create a byol model based on ResNet
+        self.projection_head = heads.BYOLProjectionHead(feature_dim, 4096, 256)
+        self.prediction_head = heads.BYOLPredictionHead(256, 4096, 256)
+
+        self.backbone_momentum = copy.deepcopy(self.backbone)
+        self.projection_head_momentum = copy.deepcopy(self.projection_head)
+
+        utils.deactivate_requires_grad(self.backbone_momentum)
+        utils.deactivate_requires_grad(self.projection_head_momentum)
+
+        self.criterion = lightly.loss.NegativeCosineSimilarity()
+
+    def forward(self, x):
+        y = self.backbone(x).flatten(start_dim=1)
+        z = self.projection_head(y)
+        p = self.prediction_head(z)
+        self.log("rep_std", debug.std_of_l2_normalized(y))
+        return p
+
+    def forward_momentum(self, x):
+        y = self.backbone_momentum(x).flatten(start_dim=1)
+        z = self.projection_head_momentum(y)
+        z = z.detach()
+        return z
+
+    def training_step(self, batch, batch_idx):
+        utils.update_momentum(self.backbone, self.backbone_momentum, m=0.99)
+        utils.update_momentum(
+            self.projection_head, self.projection_head_momentum, m=0.99
+        )
+        (x0, x1), _, _ = batch
+        p0 = self.forward(x0)
+        z0 = self.forward_momentum(x0)
+        p1 = self.forward(x1)
+        z1 = self.forward_momentum(x1)
+        loss = 0.5 * (self.criterion(p0, z1) + self.criterion(p1, z0))
+        self.log("train_loss_ssl", loss)
+        return loss
+
+    def configure_optimizers(self):
+        params = (
+            list(self.backbone.parameters())
+            + list(self.projection_head.parameters())
+            + list(self.prediction_head.parameters())
+        )
+        optim = torch.optim.SGD(
+            params,
+            lr=6e-2 * lr_factor,
+            momentum=0.9,
+            weight_decay=5e-4,
+        )
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, max_epochs)
+        return [optim], [scheduler]
+
+
 def main():
     models = [
         # Contrastive Learning
         DCLW,
-        # Distillation
-        DINOViT,
         # Redundancy Reduction
         VICReg,
         # Masked Image Modeling
         MAE,
+        # Distillation
+        BYOL,
+        DINOViT,
     ]
     results = dict()
 
