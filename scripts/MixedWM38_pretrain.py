@@ -190,6 +190,10 @@ class DINOViT(pl.LightningModule):
         )
         return [optim], [cosine_scheduler]
 
+    def predict_step(self, batch, batch_idx):
+        images, _, _ = batch
+        return self.backbone(images)
+
 
 class MAE(pl.LightningModule):
     def __init__(self):
@@ -272,6 +276,10 @@ class MAE(pl.LightningModule):
         )
         return [optim], [cosine_scheduler]
 
+    def predict_step(self, batch, batch_idx):
+        images, _, _ = batch
+        return self.backbone(images)
+
 
 class DCLW(pl.LightningModule):
     def __init__(self):
@@ -302,6 +310,10 @@ class DCLW(pl.LightningModule):
         )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, max_epochs)
         return [optim], [scheduler]
+
+    def predict_step(self, batch, batch_idx):
+        images, _, _ = batch
+        return self.backbone(images)
 
 
 class VICReg(pl.LightningModule):
@@ -336,6 +348,10 @@ class VICReg(pl.LightningModule):
             optim, self.warmup_epochs, max_epochs
         )
         return [optim], [cosine_scheduler]
+
+    def predict_step(self, batch, batch_idx):
+        images, _, _ = batch
+        return self.backbone(images)
 
 
 class BYOL(pl.LightningModule):
@@ -398,6 +414,10 @@ class BYOL(pl.LightningModule):
         )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, max_epochs)
         return [optim], [scheduler]
+
+    def predict_step(self, batch, batch_idx):
+        images, _, _ = batch
+        return self.backbone(images)
 
 
 def main():

@@ -11,11 +11,16 @@
 
 # ssl_wafermap
 
-*How much can self-supervised models learn about semiconductor data without being told what to look for?*
 
-![Wafers (2)](https://user-images.githubusercontent.com/68213622/230577877-591e7ae2-bdf7-4fee-9333-90d55822ce7a.png)
+<div style="text-align:center; font-style:italic ">
+    How much can self-supervised models learn about semiconductor data without being told what to look for?
+    <img src="https://user-images.githubusercontent.com/68213622/230577877-591e7ae2-bdf7-4fee-9333-90d55822ce7a.png" />
+</div>
 
-A longer description of your project goes here...
+
+Self-supervised learning is responsible for many recent breakthroughs in machine learning. Nearly every major development in NLP relies on self-supervised pretraining to some extent, and in vision, techniques like contrastive learning are gaining popularity as well. On ImageNet style data ([and even non-curated datasets of natural images](https://github.com/facebookresearch/vissl/blob/66a1f1997d2135f90a429ec3a37a4a503869f2a9/projects/SEER/README.md)), self-supervised learning has been shown to be a powerful tool for learning useful representations of images without the need for large amounts of labeled data.
+
+It is often unclear, however, how effectively these techniques can be applied to images in other domains. How well can self-supervised learning be used in semiconductor manufacturing, where data is large, unlabeled, and highly imbalanced? This work provides thorough evaluations of some of the most popular self-supervised learning techniques on semiconductor wafer map data. Everything is done using [lightly](https://github.com/lightly-ai/lightly), an excellent package for self-supervised learning on images using PyTorch. More than a dozen joint embedding and masked image modeling frameworks are put to the test on the WM-811K and MixedWM38 datasets.
 
 ## Installation
 
