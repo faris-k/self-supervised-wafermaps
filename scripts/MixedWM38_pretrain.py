@@ -85,8 +85,9 @@ else:
     df = pd.read_pickle("../data/processed/MixedWM38/train_data.pkl.xz")
 
 # SSL training will have no transforms passed to the dataset object; this is handled by collate function
+# Note that the labels here aren't actually used at all, we just need to pass in something
 dataset_train_ssl = LightlyDataset.from_torch_dataset(
-    WaferMapDataset(df.waferMap, df.label)
+    WaferMapDataset(df.waferMap, df.failureType.factorize(sort=True)[0])
 )
 
 # Base collate function for basic joint embedding frameworks
