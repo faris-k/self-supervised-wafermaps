@@ -11,11 +11,10 @@
 
 # ssl_wafermap
 
-
-<div style="text-align:center; font-style:italic ">
-    How much can self-supervised models learn about semiconductor data without being told what to look for?
-    <img src="https://user-images.githubusercontent.com/68213622/230577877-591e7ae2-bdf7-4fee-9333-90d55822ce7a.png" />
-</div>
+<p align="center"><em>How much can self-supervised models learn about semiconductor data without being told what to look for?</em></p>
+<p align="center">
+  <img src="https://user-images.githubusercontent.com/68213622/230577877-591e7ae2-bdf7-4fee-9333-90d55822ce7a.png" alt="watercolor integrated circuits" />
+</p>
 
 
 Self-supervised learning is responsible for many recent breakthroughs in machine learning. Nearly every major development in NLP relies on self-supervised pretraining to some extent, and in vision, techniques like contrastive learning are gaining popularity as well. On ImageNet style data ([and even non-curated datasets of natural images](https://github.com/facebookresearch/vissl/blob/66a1f1997d2135f90a429ec3a37a4a503869f2a9/projects/SEER/README.md)), self-supervised learning has been shown to be a powerful tool for learning useful representations of images without the need for large amounts of labeled data.
