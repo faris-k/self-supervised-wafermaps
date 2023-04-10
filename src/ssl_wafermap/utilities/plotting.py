@@ -4,7 +4,9 @@ import seaborn as sns
 
 # Modified from https://github.com/sparks-baird/mat_discover/blob/73b33bcf8a8e897d8d6dc0f334508ef935e8fc96/mat_discover/utils/plotting.py#L254
 # Which itself is modified from: https://medium.com/swlh/formatting-a-plotly-figure-with-matplotlib-style-fa56ddd97539)
-def matplotlibify(fig, font_size=24, width_inches=5.5, height_inches=3.5, dpi=142):
+def matplotlibify(
+    fig, template="seaborn", font_size=24, width_inches=5.5, height_inches=3.5, dpi=142
+):
     """Make a plotly figure look like a matplotlib figure
 
     Parameters
@@ -29,7 +31,7 @@ def matplotlibify(fig, font_size=24, width_inches=5.5, height_inches=3.5, dpi=14
 
     fig.update_layout(
         font=font_dict,
-        template="seaborn",
+        template=template,
         width=width_inches * dpi,
         height=height_inches * dpi,
         margin=dict(r=40, t=20, b=10),
