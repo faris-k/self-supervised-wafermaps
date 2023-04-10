@@ -2,14 +2,33 @@ import seaborn as sns
 
 
 # Modified from https://github.com/sparks-baird/mat_discover/blob/73b33bcf8a8e897d8d6dc0f334508ef935e8fc96/mat_discover/utils/plotting.py#L254
+# Which itself is modified from: https://medium.com/swlh/formatting-a-plotly-figure-with-matplotlib-style-fa56ddd97539)
 def matplotlibify(fig, font_size=24, width_inches=5.5, height_inches=3.5, dpi=142):
-    # make it look more like matplotlib
-    # modified from: https://medium.com/swlh/formatting-a-plotly-figure-with-matplotlib-style-fa56ddd97539)
+    """Make a plotly figure look like a matplotlib figure
+
+    Parameters
+    ----------
+    fig : plotly.graph_objects.Figure
+        The plotly figure to modify
+    font_size : int, optional
+        Font size of tick labels, by default 24
+    width_inches : float, optional
+        Width of figure in inches, by default 5.5
+    height_inches : float, optional
+        Height of figure in inches, by default 3.5
+    dpi : int, optional
+        Dots per inch of figure, by default 142
+
+    Returns
+    -------
+    fig : plotly.graph_objects.Figure
+        The modified plotly figure
+    """
     font_dict = dict(family="Arial", size=font_size, color="black")
 
     fig.update_layout(
         font=font_dict,
-        # plot_bgcolor="white",
+        template="seaborn",
         width=width_inches * dpi,
         height=height_inches * dpi,
         margin=dict(r=40, t=20, b=10),
@@ -46,6 +65,7 @@ def matplotlibify(fig, font_size=24, width_inches=5.5, height_inches=3.5, dpi=14
 
 
 def init_seaborn_style():
+    """Initialize a custom seaborn style for plotting"""
     sns.set_style(
         "darkgrid",
         {
@@ -61,3 +81,18 @@ def init_seaborn_style():
     )
 
     sns.set_context("paper", font_scale=1.75)
+
+
+def thiccify(ax, width=1.5):
+    """Make the axes lines thicker
+
+    Parameters
+    ----------
+    ax : matplotlib.axes._subplots.AxesSubplot
+        The axes to thiccify
+    width : float, optional
+        Line width of axes, by default 1.5
+    """
+    ax.tick_params(width)
+    for axis in ["top", "bottom", "left", "right"]:
+        ax.spines[axis].set_linewidth(width)
