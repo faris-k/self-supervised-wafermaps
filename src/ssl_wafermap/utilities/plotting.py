@@ -1,3 +1,4 @@
+import matplotlib.pyplot as plt
 import seaborn as sns
 
 
@@ -83,7 +84,7 @@ def init_seaborn_style():
     sns.set_context("paper", font_scale=1.75)
 
 
-def thiccify(ax, width=1.5):
+def ax_thiccify(ax, width=1.5):
     """Make the axes lines thicker
 
     Parameters
@@ -93,6 +94,33 @@ def thiccify(ax, width=1.5):
     width : float, optional
         Line width of axes, by default 1.5
     """
-    ax.tick_params(width)
+    ax.tick_params(width=width)
     for axis in ["top", "bottom", "left", "right"]:
         ax.spines[axis].set_linewidth(width)
+
+
+def legend_thiccify(
+    ax, line_width=4, legend_title=None, bbox_to_anchor=(1.0, 1.0), **kwargs
+):
+    """Make the legend lines of a seaborn plot thicker
+    and move it outside the plot
+
+    Parameters
+    ----------
+    ax : matplotlib.axes._subplots.AxesSubplot
+        The axes to modify
+    line_width : float, optional
+        Line width of the legend lines, by default 4
+    legend_title : str, optional
+        Title of the legend, by default None
+    bbox_to_anchor : tuple, optional
+        Bounding box of the legend, by default (1.0, 1.0)
+    **kwargs
+        Additional keyword arguments to pass to sns.move_legend
+    """
+    legend = plt.legend()
+    for line in legend.get_lines():
+        line.set_linewidth(line_width)
+    sns.move_legend(
+        ax, "upper left", bbox_to_anchor=bbox_to_anchor, title=legend_title, **kwargs
+    )
