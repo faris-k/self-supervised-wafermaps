@@ -1,0 +1,5 @@
+# Remove all the semi-supervised UMAPs except the 0.99 ones
+*0.1.png
+*0.25.png
+*0.5.png
+*0.75.png

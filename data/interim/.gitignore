@@ -1,4 +1,5 @@
-# Ignore everything in this directory
-# *
+# Ignore full predictions; too large
+*preds_full.pkl.xz
+
 # Except this file
 !.gitignore
