@@ -1,5 +1,7 @@
 import matplotlib.pyplot as plt
+import plotly.express as px
 import seaborn as sns
+from plotly.subplots import make_subplots
 
 
 # Modified from https://github.com/sparks-baird/mat_discover/blob/73b33bcf8a8e897d8d6dc0f334508ef935e8fc96/mat_discover/utils/plotting.py#L254
@@ -126,3 +128,105 @@ def legend_thiccify(
     sns.move_legend(
         ax, "upper left", bbox_to_anchor=bbox_to_anchor, title=legend_title, **kwargs
     )
+
+
+def create_subplots(
+    df,
+    x_col1,
+    y_col1,
+    x_col2,
+    y_col2,
+    color_col,
+    subplot_title1,
+    subplot_title2,
+    legend_title,
+    **scatter_kwargs
+):
+    """Create a plotly figure with two subplots
+
+    Parameters
+    ----------
+    df : pandas.core.frame.DataFrame
+        The dataframe to plot
+    x_col1 : str
+        Column name to plot on the x-axis of the first subplot
+    y_col1 : str
+        Column name to plot on the y-axis of the first subplot
+    x_col2 : str
+        Column name to plot on the x-axis of the second subplot
+    y_col2 : str
+        Column name to plot on the y-axis of the second subplot
+    color_col : str
+        Column name to color the points by
+    subplot_title1 : str
+        Title of the first subplot
+    subplot_title2 : str
+        Title of the second subplot
+    legend_title : str
+        Title of the legend
+    **scatter_kwargs
+        Additional keyword arguments to pass to px.scatter
+
+    Returns
+    -------
+    fig : plotly.graph_objects.Figure
+        The plotly figure with two subplots
+    """
+    # Initialize subplots
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        subplot_titles=(subplot_title1, subplot_title2),
+        horizontal_spacing=0.01,
+    )
+
+    # Initialize individual figures
+    fig1 = px.scatter(df, x=x_col1, y=y_col1, color=color_col, **scatter_kwargs)
+    fig2 = px.scatter(df, x=x_col2, y=y_col2, color=color_col, **scatter_kwargs)
+
+    # To prevent the legend from showing up twice, disable it for the second plot
+    for trace in fig2.data:
+        trace.update(showlegend=False)
+    # Now, add the traces to the figure
+    for trace1, trace2 in zip(fig1.data, fig2.data):
+        fig.add_trace(trace1, row=1, col=1)
+        fig.add_trace(trace2, row=1, col=2)
+    # Update the layout
+    fig.update_layout(
+        height=600,
+        width=1500,
+        legend_title=legend_title,
+        margin=dict(r=200, t=40, b=0, l=0),
+        legend={"itemsizing": "constant"},
+        font=dict(family="Arial", size=24),
+        xaxis_title="",
+        yaxis_title="",
+        template="simple_white",
+    )
+
+    # Increase font size of subplot titles
+    fig.for_each_annotation(lambda a: a.update(font=dict(family="Arial", size=26)))
+
+    fig.update_xaxes(
+        showgrid=False,
+        showticklabels=False,
+        ticks="",
+        zeroline=False,
+        showline=True,
+        linewidth=2.4,
+        linecolor="black",
+        mirror="allticks",
+    )
+
+    fig.update_yaxes(
+        showgrid=False,
+        showticklabels=False,
+        ticks="",
+        zeroline=False,
+        showline=True,
+        linewidth=2.4,
+        linecolor="black",
+        mirror="allticks",
+    )
+
+    return fig

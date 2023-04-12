@@ -140,11 +140,11 @@ class DINOViT(pl.LightningModule):
         feature_dim = self.backbone.embed_dim
 
         self.head = heads.DINOProjectionHead(
-            feature_dim, 2048, 256, 2048, batch_norm=True
+            feature_dim, 2048, 256, 2048, batch_norm=False
         )
         self.teacher_backbone = copy.deepcopy(self.backbone)
         self.teacher_head = heads.DINOProjectionHead(
-            feature_dim, 2048, 256, 2048, batch_norm=True
+            feature_dim, 2048, 256, 2048, batch_norm=False
         )
 
         utils.deactivate_requires_grad(self.teacher_backbone)
