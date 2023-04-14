@@ -32,3 +32,18 @@ class WaferMapDataset(Dataset):
 
     def __len__(self):
         return len(self.X_list)
+
+
+class TensorDataset(Dataset):
+    def __init__(self, X, y):
+        self.X = torch.tensor(X).type(torch.float32)
+        self.y = torch.tensor(y).type(torch.LongTensor)
+        self.data = (X, y)
+
+    def __getitem__(self, index):
+        x = self.X[index]
+        y = self.y[index]
+        return x, y
+
+    def __len__(self):
+        return len(self.X)

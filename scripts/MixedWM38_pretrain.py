@@ -24,6 +24,7 @@ from ssl_wafermap.utilities.transforms import (
     WaferDINOCOllateFunction,
     WaferImageCollateFunction,
     WaferMAECollateFunction2,
+    WaferMSNCollateFunction,
 )
 
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
@@ -39,7 +40,7 @@ logs_root_dir = "../models/mixed_wm38_pretrain"
 
 num_workers = 2  # os.cpu_count()
 
-subset = True  # Whether to train using a subset of the dataset
+subset = False  # Whether to train using a subset of the dataset
 max_epochs = 5 if subset else 150
 input_size = 224
 
@@ -47,7 +48,7 @@ input_size = 224
 distributed = False
 
 # Set to True to enable Mixed Precision training.
-use_amp = False
+use_amp = True
 
 # Set to True to enable Synchronized Batch Norm (requires distributed=True).
 # If enabled the batch norm is calculated over all gpus, otherwise the batch
@@ -93,14 +94,17 @@ dataset_train_ssl = LightlyDataset.from_torch_dataset(
 # Base collate function for basic joint embedding frameworks
 # e.g. SimCLR, MoCo, BYOL, Barlow Twins, DCLW, SimSiam
 collate_fn = WaferImageCollateFunction(
-    img_size=[input_size, input_size], normalize=True
+    denoise=True,
 )
 
-# DINO and MAE will use their own collate functions
+# DINO, MAE, and MSN will use their own collate functions
 dino_collate_fn = WaferDINOCOllateFunction(
-    global_crop_size=input_size, local_crop_size=input_size // 2
+    global_crop_size=input_size, local_crop_size=input_size // 2, denoise=True
 )
-mae2_collate_fn = WaferMAECollateFunction2()
+mae2_collate_fn = WaferMAECollateFunction2(denoise=True)
+msn_collate_fn = WaferMSNCollateFunction(
+    random_size=input_size, focal_size=input_size // 2, denoise=True
+)
 
 
 def get_data_loader(batch_size: int, model):
@@ -116,6 +120,8 @@ def get_data_loader(batch_size: int, model):
         col_fn = dino_collate_fn
     elif model == MAE:
         col_fn = mae2_collate_fn
+    elif model == MSN:
+        col_fn = msn_collate_fn
 
     dataloader_train_ssl = DataLoader(
         dataset_train_ssl,
@@ -420,8 +426,94 @@ class BYOL(pl.LightningModule):
         return self.backbone(images)
 
 
+class MSN(pl.LightningModule):
+    def __init__(self):
+        super().__init__()
+
+        self.warmup_epochs = 15
+        #  ViT small configuration (ViT-S/16) = dict(patch_size=16, embed_dim=384, depth=12, num_heads=6)
+        #  ViT tiny configuration (ViT-T/16) = dict(patch_size=16, embed_dim=192, depth=12, num_heads=3)
+        self.mask_ratio = 0.15
+        self.backbone = masked_autoencoder.MAEBackbone(
+            image_size=224,
+            patch_size=16,
+            num_layers=12,
+            num_heads=6,
+            hidden_dim=384,
+            mlp_dim=384 * 4,
+        )
+        self.projection_head = heads.MSNProjectionHead(384)
+
+        self.anchor_backbone = copy.deepcopy(self.backbone)
+        self.anchor_projection_head = copy.deepcopy(self.projection_head)
+
+        utils.deactivate_requires_grad(self.backbone)
+        utils.deactivate_requires_grad(self.projection_head)
+
+        self.prototypes = nn.Linear(256, 1024, bias=False).weight
+        self.criterion = lightly.loss.MSNLoss()
+
+    def training_step(self, batch, batch_idx):
+        utils.update_momentum(self.anchor_backbone, self.backbone, 0.996)
+        utils.update_momentum(self.anchor_projection_head, self.projection_head, 0.996)
+
+        views, _, _ = batch
+        views = [view.to(self.device, non_blocking=True) for view in views]
+        targets = views[0]
+        anchors = views[1]
+        anchors_focal = torch.concat(views[2:], dim=0)
+
+        targets_out = self.backbone(targets)
+        targets_out = self.projection_head(targets_out)
+        anchors_out = self.encode_masked(anchors)
+        anchors_focal_out = self.encode_masked(anchors_focal)
+        anchors_out = torch.cat([anchors_out, anchors_focal_out], dim=0)
+
+        loss = self.criterion(anchors_out, targets_out, self.prototypes.data)
+        self.log("train_loss_ssl", loss)
+        self.log(
+            "rep_std",
+            debug.std_of_l2_normalized(targets_out.flatten(1)),
+        )
+        return loss
+
+    def encode_masked(self, anchors):
+        batch_size, _, _, width = anchors.shape
+        seq_length = (width // self.anchor_backbone.patch_size) ** 2
+        idx_keep, _ = utils.random_token_mask(
+            size=(batch_size, seq_length),
+            mask_ratio=self.mask_ratio,
+            device=self.device,
+        )
+        out = self.anchor_backbone(anchors, idx_keep)
+        return self.anchor_projection_head(out)
+
+    def configure_optimizers(self):
+        params = [
+            *list(self.anchor_backbone.parameters()),
+            *list(self.anchor_projection_head.parameters()),
+            self.prototypes,
+        ]
+        optim = torch.optim.AdamW(
+            params=params,
+            lr=1.5e-4 * lr_factor,
+            weight_decay=0.05,
+            betas=(0.9, 0.95),
+        )
+        cosine_scheduler = scheduler.CosineWarmupScheduler(
+            optim, self.warmup_epochs, max_epochs
+        )
+        return [optim], [cosine_scheduler]
+
+    def predict_step(self, batch, batch_idx):
+        images, _, _ = batch
+        return self.backbone(images)
+
+
 def main():
     models = [
+        # Mask Denoising
+        MSN,
         # Contrastive Learning
         DCLW,
         # Redundancy Reduction
@@ -461,7 +553,7 @@ def main():
                 experiment_version = logger.version
             checkpoint_callback = pl.callbacks.ModelCheckpoint(
                 dirpath=os.path.join(logger.log_dir, "checkpoints"),
-                every_n_epochs=max_epochs // 10,
+                every_n_epochs=max_epochs // 5,
             )
 
             trainer = pl.Trainer(
@@ -475,6 +567,7 @@ def main():
                 callbacks=[checkpoint_callback],
                 enable_progress_bar=True,
                 precision="16-mixed" if use_amp else "32-true",
+                benchmark=True,
             )
             start = time.time()
             trainer.fit(

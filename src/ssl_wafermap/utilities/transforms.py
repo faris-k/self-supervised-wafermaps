@@ -1,6 +1,7 @@
 import random
 from typing import List, Tuple
 
+import cv2
 import numpy as np
 import torch
 import torchvision.transforms as T
@@ -83,6 +84,27 @@ class RandomOneOf:
             img = self.transforms[idx](img)
 
         return img
+
+
+class MedianFilter:
+    """Applies a median filter to denoise a wafermap.
+    Simply uses OpenCV's medianBlur function.
+
+    Parameters
+    ----------
+    kernel_size : int, optional
+        Size of the median filter kernel, by default 3
+    """
+
+    def __init__(self, kernel_size=3):
+        self.kernel_size = kernel_size
+
+    def __call__(self, sample: torch.Tensor) -> torch.Tensor:
+        # OpenCV expects a numpy array
+        sample_np = sample.numpy()
+        sample_np = cv2.medianBlur(sample_np, self.kernel_size)
+        return torch.from_numpy(sample_np)
+        # return median(sample)
 
 
 class DPWTransform:
@@ -234,9 +256,68 @@ NORMALIZE_STATS = {
 }
 
 
+# def get_base_transforms(
+#     img_size: List[int] = [224, 224],
+#     die_noise_prob: float = 0.03,
+#     rr_prob: float = 0.5,
+#     hf_prob: float = 0.5,
+#     vf_prob: float = 0.5,
+#     to_tensor: bool = True,
+#     normalize: bool = True,
+# ) -> T.Compose:
+#     """Base image transforms for self-supervised training.
+#     Applies randomized die noise, converts to PIL Image, resizes, rotates, flips, and optionally converts to tensor.
+
+#     Parameters
+#     ----------
+#     img_size : List[int], optional
+#         Size of image, by default [224, 224]
+#     die_noise_prob : float, optional
+#         Probability of adding die noise, by default 0.03
+#     rr_prob : float, optional
+#         Probability of rotating image 90 degrees, by default 0.5
+#     hf_prob : float, optional
+#         Probability of flipping image horizontally, by default 0.5
+#     vf_prob : float, optional
+#         Probability of flipping image vertically, by default 0.5
+#     to_tensor : bool, optional
+#         Whether to convert to tensor, by default True.
+#         Use False if you need further augmentations like global/patch cropping.
+#     """
+
+#     transforms = [
+#         # Randomly perform either DieNoise or DPWTransform with a 50% chance
+#         RandomOneOf(
+#             [
+#                 DieNoise(die_noise_prob),
+#                 DPWTransform(),
+#             ]
+#         ),
+#         # Convert to PIL Image, then perform all torchvision transforms except cropping
+#         T.ToPILImage(),
+#         T.Resize(img_size, interpolation=InterpolationMode.NEAREST),
+#         RandomRotate(rr_prob),
+#         T.RandomVerticalFlip(vf_prob),
+#         T.RandomHorizontalFlip(hf_prob),
+#         # Finally, create a 3-channel image and convert to tensor
+#         T.Grayscale(num_output_channels=3),  # R == G == B
+#     ]
+
+#     # Optionally convert to tensor
+#     if to_tensor:
+#         transforms.append(T.ToTensor())
+
+#     # Optionally normalize
+#     if normalize:
+#         transforms.append(T.Normalize(**NORMALIZE_STATS))
+
+#     return T.Compose(transforms)
+
+
 def get_base_transforms(
     img_size: List[int] = [224, 224],
     die_noise_prob: float = 0.03,
+    denoise: bool = False,
     rr_prob: float = 0.5,
     hf_prob: float = 0.5,
     vf_prob: float = 0.5,
@@ -252,6 +333,10 @@ def get_base_transforms(
         Size of image, by default [224, 224]
     die_noise_prob : float, optional
         Probability of adding die noise, by default 0.03
+    denoise : bool, optional
+        Whether to apply denoising via median filtering, by default False.
+        If False, DPWTransform is applied instead. Note that denoising may
+        remove salient defect patterns, so it should be used with care.
     rr_prob : float, optional
         Probability of rotating image 90 degrees, by default 0.5
     hf_prob : float, optional
@@ -268,7 +353,7 @@ def get_base_transforms(
         RandomOneOf(
             [
                 DieNoise(die_noise_prob),
-                DPWTransform(),
+                MedianFilter() if denoise else DPWTransform(),
             ]
         ),
         # Convert to PIL Image, then perform all torchvision transforms except cropping
@@ -314,6 +399,7 @@ class WaferImageCollateFunction(BaseCollateFunction):
         self,
         img_size: List[int] = [224, 224],
         die_noise_prob: float = 0.03,
+        denoise: bool = False,
         hf_prob: float = 0.5,
         vf_prob: float = 0.5,
         rr_prob: float = 0.5,
@@ -322,6 +408,7 @@ class WaferImageCollateFunction(BaseCollateFunction):
         transforms = get_base_transforms(
             img_size=img_size,
             die_noise_prob=die_noise_prob,
+            denoise=denoise,
             hf_prob=hf_prob,
             vf_prob=vf_prob,
             rr_prob=rr_prob,
@@ -352,6 +439,7 @@ class WaferFastSiamCollateFunction(MultiViewCollateFunction):
         self,
         img_size: List[int] = [224, 224],
         die_noise_prob: float = 0.03,
+        denoise: bool = False,
         hf_prob: float = 0.5,
         vf_prob: float = 0.5,
         rr_prob: float = 0.5,
@@ -360,6 +448,7 @@ class WaferFastSiamCollateFunction(MultiViewCollateFunction):
         transforms = get_base_transforms(
             img_size=img_size,
             die_noise_prob=die_noise_prob,
+            denoise=denoise,
             hf_prob=hf_prob,
             vf_prob=vf_prob,
             rr_prob=rr_prob,
@@ -380,6 +469,7 @@ class WaferDINOCOllateFunction(MultiViewCollateFunction):
         local_crop_scale: Tuple[float, float] = (0.1, 0.4),
         n_local_views: int = 6,
         die_noise_prob: float = 0.03,
+        denoise: bool = False,
         hf_prob: float = 0.5,
         vf_prob: float = 0.5,
         rr_prob: float = 0.5,
@@ -413,6 +503,7 @@ class WaferDINOCOllateFunction(MultiViewCollateFunction):
         base_transform = get_base_transforms(
             img_size=[global_crop_size, global_crop_size],
             die_noise_prob=die_noise_prob,
+            denoise=denoise,
             hf_prob=hf_prob,
             vf_prob=vf_prob,
             rr_prob=rr_prob,
@@ -425,7 +516,6 @@ class WaferDINOCOllateFunction(MultiViewCollateFunction):
             scale=global_crop_scale,
             ratio=(1.0, 1.0),
             interpolation=InterpolationMode.NEAREST,
-            antialias=False,
         )
 
         local_crop = T.RandomResizedCrop(
@@ -433,7 +523,6 @@ class WaferDINOCOllateFunction(MultiViewCollateFunction):
             scale=local_crop_scale,
             ratio=(1.0, 1.0),
             interpolation=InterpolationMode.NEAREST,
-            antialias=False,
         )
 
         global_transform = T.Compose(
@@ -502,6 +591,7 @@ class WaferMSNCollateFunction(MultiViewCollateFunction):
         random_crop_scale: Tuple[float, float] = (0.6, 1.0),
         focal_crop_scale: Tuple[float, float] = (0.1, 0.4),
         die_noise_prob: float = 0.03,
+        denoise: bool = False,
         rr_prob: float = 0.5,
         hf_prob: float = 0.5,
         vf_prob: float = 0.0,
@@ -509,6 +599,7 @@ class WaferMSNCollateFunction(MultiViewCollateFunction):
         base_transform = get_base_transforms(
             img_size=[random_size, random_size],
             die_noise_prob=die_noise_prob,
+            denoise=denoise,
             hf_prob=hf_prob,
             vf_prob=vf_prob,
             rr_prob=rr_prob,
@@ -524,7 +615,6 @@ class WaferMSNCollateFunction(MultiViewCollateFunction):
                     scale=random_crop_scale,
                     ratio=(1.0, 1.0),
                     interpolation=InterpolationMode.NEAREST,
-                    antialias=False,
                 ),
                 T.ToTensor(),
                 T.Normalize(**NORMALIZE_STATS),
@@ -537,7 +627,6 @@ class WaferMSNCollateFunction(MultiViewCollateFunction):
                     scale=focal_crop_scale,
                     ratio=(1.0, 1.0),
                     interpolation=InterpolationMode.NEAREST,
-                    antialias=False,
                 ),
                 T.ToTensor(),
                 T.Normalize(**NORMALIZE_STATS),
@@ -599,6 +688,7 @@ class WaferMAECollateFunction2(MultiViewCollateFunction):
         self,
         img_size: List[int] = [224, 224],
         die_noise_prob: float = 0.03,
+        denoise: bool = False,
         hf_prob: float = 0.5,
         vf_prob: float = 0.5,
         rr_prob: float = 0.5,
@@ -607,6 +697,7 @@ class WaferMAECollateFunction2(MultiViewCollateFunction):
         transforms = get_base_transforms(
             img_size=img_size,
             die_noise_prob=die_noise_prob,
+            denoise=denoise,
             hf_prob=hf_prob,
             vf_prob=vf_prob,
             rr_prob=rr_prob,
@@ -670,7 +761,6 @@ class WaferMultiCropCollateFunction(MultiViewCollateFunction):
                 scale=(crop_min_scales[i], crop_max_scales[i]),
                 ratio=(1.0, 1.0),
                 interpolation=InterpolationMode.NEAREST,
-                antialias=False,
             )
 
             crop_transforms.extend(
@@ -718,6 +808,7 @@ class WaferSwaVCollateFunction(WaferMultiCropCollateFunction):
         crop_min_scales: List[float] = [0.6, 0.1],
         crop_max_scales: List[float] = [1.0, 0.4],
         die_noise_prob: float = 0.03,
+        denoise: bool = False,
         hf_prob: float = 0.5,
         vf_prob: float = 0.5,
         rr_prob: float = 0.5,
@@ -726,6 +817,7 @@ class WaferSwaVCollateFunction(WaferMultiCropCollateFunction):
         transforms = get_base_transforms(
             img_size=[crop_sizes[0], crop_sizes[0]],
             die_noise_prob=die_noise_prob,
+            denoise=denoise,
             rr_prob=rr_prob,
             hf_prob=hf_prob,
             vf_prob=vf_prob,
