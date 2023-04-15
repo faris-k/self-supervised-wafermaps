@@ -25,6 +25,7 @@ from ssl_wafermap.utilities.transforms import (
     WaferImageCollateFunction,
     WaferMAECollateFunction2,
     WaferMSNCollateFunction,
+    WaferSwaVCollateFunction,
 )
 
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
@@ -105,6 +106,9 @@ mae2_collate_fn = WaferMAECollateFunction2(denoise=True)
 msn_collate_fn = WaferMSNCollateFunction(
     random_size=input_size, focal_size=input_size // 2, denoise=True
 )
+swav_collate_fn = WaferSwaVCollateFunction(
+    crop_sizes=[input_size, input_size // 2], denoise=True
+)
 
 
 def get_data_loader(batch_size: int, model):
@@ -122,6 +126,8 @@ def get_data_loader(batch_size: int, model):
         col_fn = mae2_collate_fn
     elif model == MSN:
         col_fn = msn_collate_fn
+    elif model == SwaV:
+        col_fn = swav_collate_fn
 
     dataloader_train_ssl = DataLoader(
         dataset_train_ssl,
@@ -195,6 +201,61 @@ class DINOViT(pl.LightningModule):
             optim, self.warmup_epochs, max_epochs
         )
         return [optim], [cosine_scheduler]
+
+    def predict_step(self, batch, batch_idx):
+        images, _, _ = batch
+        return self.backbone(images)
+
+
+class SwaV(pl.LightningModule):
+    def __init__(self):
+        super().__init__()
+        # create a ResNet backbone and remove the classification head
+        self.backbone = timm.create_model("resnet18", num_classes=0, pretrained=False)
+        feature_dim = self.backbone.num_features
+
+        self.projection_head = heads.SwaVProjectionHead(feature_dim, 2048, 128)
+        self.prototypes = heads.SwaVPrototypes(128, 3000)  # use 3000 prototypes
+
+        self.criterion = lightly.loss.SwaVLoss(
+            sinkhorn_gather_distributed=gather_distributed
+        )
+
+    def forward(self, x):
+        x = self.backbone(x).flatten(start_dim=1)
+        self.log("rep_std", debug.std_of_l2_normalized(x))
+        x = self.projection_head(x)
+        x = nn.functional.normalize(x, dim=1, p=2)
+        return self.prototypes(x)
+
+    def training_step(self, batch, batch_idx):
+        # normalize the prototypes so they are on the unit sphere
+        self.prototypes.normalize()
+
+        # the multi-crop dataloader returns a list of image crops where the
+        # first two items are the high resolution crops and the rest are low
+        # resolution crops
+        multi_crops, _, _ = batch
+        multi_crop_features = [self.forward(x) for x in multi_crops]
+
+        # split list of crop features into high and low resolution
+        high_resolution_features = multi_crop_features[:2]
+        low_resolution_features = multi_crop_features[2:]
+
+        # calculate the SwaV loss
+        loss = self.criterion(high_resolution_features, low_resolution_features)
+
+        self.log("train_loss_ssl", loss)
+        return loss
+
+    def configure_optimizers(self):
+        optim = torch.optim.Adam(
+            self.parameters(),
+            lr=1e-3 * lr_factor,
+            weight_decay=1e-6,
+        )
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, max_epochs)
+        return [optim], [scheduler]
 
     def predict_step(self, batch, batch_idx):
         images, _, _ = batch
@@ -512,17 +573,19 @@ class MSN(pl.LightningModule):
 
 def main():
     models = [
-        # Mask Denoising
-        MSN,
-        # Contrastive Learning
-        DCLW,
-        # Redundancy Reduction
-        VICReg,
-        # Masked Image Modeling
-        MAE,
-        # Distillation
-        BYOL,
-        DINOViT,
+        # Clustering
+        SwaV,
+        # # Mask Denoising
+        # MSN,
+        # # Contrastive Learning
+        # DCLW,
+        # # Redundancy Reduction
+        # VICReg,
+        # # Masked Image Modeling
+        # MAE,
+        # # Distillation
+        # BYOL,
+        # # DINOViT,
     ]
     results = dict()
 
@@ -553,7 +616,7 @@ def main():
                 experiment_version = logger.version
             checkpoint_callback = pl.callbacks.ModelCheckpoint(
                 dirpath=os.path.join(logger.log_dir, "checkpoints"),
-                every_n_epochs=max_epochs // 5,
+                # every_n_epochs=max_epochs // 5,
             )
 
             trainer = pl.Trainer(
