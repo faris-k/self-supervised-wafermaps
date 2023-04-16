@@ -575,17 +575,17 @@ def main():
     models = [
         # Clustering
         SwaV,
-        # # Mask Denoising
-        # MSN,
-        # # Contrastive Learning
-        # DCLW,
-        # # Redundancy Reduction
-        # VICReg,
-        # # Masked Image Modeling
-        # MAE,
-        # # Distillation
-        # BYOL,
-        # # DINOViT,
+        # Mask Denoising
+        MSN,
+        # Contrastive Learning
+        DCLW,
+        # Redundancy Reduction
+        VICReg,
+        # Masked Image Modeling
+        MAE,
+        # Distillation
+        BYOL,
+        # DINOViT,
     ]
     results = dict()
 
