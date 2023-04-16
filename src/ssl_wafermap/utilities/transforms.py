@@ -318,6 +318,7 @@ def get_base_transforms(
     img_size: List[int] = [224, 224],
     die_noise_prob: float = 0.03,
     denoise: bool = False,
+    crop: bool = False,
     rr_prob: float = 0.5,
     hf_prob: float = 0.5,
     vf_prob: float = 0.5,
@@ -366,6 +367,24 @@ def get_base_transforms(
         T.Grayscale(num_output_channels=3),  # R == G == B
     ]
 
+    # If cropping, add a random crop transform with a 50% chance
+    if crop:
+        transforms.append(
+            T.RandomApply(
+                torch.nn.ModuleList(
+                    [
+                        T.RandomResizedCrop(
+                            size=img_size,
+                            scale=(0.4, 1.0),
+                            ratio=(1.0, 1.0),
+                            interpolation=InterpolationMode.NEAREST,
+                        )
+                    ]
+                ),
+                p=0.5,
+            )
+        )
+
     # Optionally convert to tensor
     if to_tensor:
         transforms.append(T.ToTensor())
@@ -399,6 +418,7 @@ class WaferImageCollateFunction(BaseCollateFunction):
         self,
         img_size: List[int] = [224, 224],
         die_noise_prob: float = 0.03,
+        crop: bool = False,
         denoise: bool = False,
         hf_prob: float = 0.5,
         vf_prob: float = 0.5,
@@ -409,6 +429,7 @@ class WaferImageCollateFunction(BaseCollateFunction):
             img_size=img_size,
             die_noise_prob=die_noise_prob,
             denoise=denoise,
+            crop=crop,
             hf_prob=hf_prob,
             vf_prob=vf_prob,
             rr_prob=rr_prob,
@@ -440,6 +461,7 @@ class WaferFastSiamCollateFunction(MultiViewCollateFunction):
         img_size: List[int] = [224, 224],
         die_noise_prob: float = 0.03,
         denoise: bool = False,
+        crop: bool = False,
         hf_prob: float = 0.5,
         vf_prob: float = 0.5,
         rr_prob: float = 0.5,
@@ -449,6 +471,7 @@ class WaferFastSiamCollateFunction(MultiViewCollateFunction):
             img_size=img_size,
             die_noise_prob=die_noise_prob,
             denoise=denoise,
+            crop=crop,
             hf_prob=hf_prob,
             vf_prob=vf_prob,
             rr_prob=rr_prob,
@@ -504,6 +527,7 @@ class WaferDINOCOllateFunction(MultiViewCollateFunction):
             img_size=[global_crop_size, global_crop_size],
             die_noise_prob=die_noise_prob,
             denoise=denoise,
+            crop=False,  # we already use multi-crop
             hf_prob=hf_prob,
             vf_prob=vf_prob,
             rr_prob=rr_prob,
@@ -600,6 +624,7 @@ class WaferMSNCollateFunction(MultiViewCollateFunction):
             img_size=[random_size, random_size],
             die_noise_prob=die_noise_prob,
             denoise=denoise,
+            crop=False,  # we already use multi-crop
             hf_prob=hf_prob,
             vf_prob=vf_prob,
             rr_prob=rr_prob,
@@ -689,6 +714,7 @@ class WaferMAECollateFunction2(MultiViewCollateFunction):
         img_size: List[int] = [224, 224],
         die_noise_prob: float = 0.03,
         denoise: bool = False,
+        crop: bool = False,
         hf_prob: float = 0.5,
         vf_prob: float = 0.5,
         rr_prob: float = 0.5,
@@ -698,6 +724,7 @@ class WaferMAECollateFunction2(MultiViewCollateFunction):
             img_size=img_size,
             die_noise_prob=die_noise_prob,
             denoise=denoise,
+            crop=crop,
             hf_prob=hf_prob,
             vf_prob=vf_prob,
             rr_prob=rr_prob,
@@ -818,6 +845,7 @@ class WaferSwaVCollateFunction(WaferMultiCropCollateFunction):
             img_size=[crop_sizes[0], crop_sizes[0]],
             die_noise_prob=die_noise_prob,
             denoise=denoise,
+            crop=False,  # we already use multi-crop
             rr_prob=rr_prob,
             hf_prob=hf_prob,
             vf_prob=vf_prob,

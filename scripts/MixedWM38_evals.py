@@ -1018,7 +1018,7 @@ def linear_probe_ssl():
         test_features = torch.cat(test_features, dim=0)
 
         for train_split_name, train_df in train_splits.items():
-            print(f"Training linear probe on {train_split_name}")
+            print(f"Evaluating using on {train_split_name}")
             linear_probe(
                 model,
                 model_name,

@@ -130,7 +130,9 @@ dataset_train_supervised = LightlyDataset.from_torch_dataset(
 # Base collate function for basic joint embedding frameworks
 # e.g. SimCLR, MoCo, BYOL, Barlow Twins, DCLW, SimSiam
 collate_fn = WaferImageCollateFunction(
-    img_size=[input_size, input_size], normalize=True
+    img_size=[input_size, input_size],
+    crop=True,
+    normalize=True,
 )
 
 # DINO, FastSiam, MSN, MAE, SwaV all need their own collate functions
@@ -138,7 +140,7 @@ dino_collate_fn = WaferDINOCOllateFunction(
     global_crop_size=input_size, local_crop_size=input_size // 2
 )
 
-fastsiam_collate_fn = WaferFastSiamCollateFunction([input_size, input_size])
+fastsiam_collate_fn = WaferFastSiamCollateFunction([input_size, input_size], crop=True)
 
 msn_collate_fn = WaferMSNCollateFunction(
     random_size=input_size, focal_size=input_size // 2
@@ -146,7 +148,7 @@ msn_collate_fn = WaferMSNCollateFunction(
 
 mae_collate_fn = WaferMAECollateFunction()
 
-mae2_collate_fn = WaferMAECollateFunction2()
+mae2_collate_fn = WaferMAECollateFunction2(crop=True)
 
 swav_collate_fn = WaferSwaVCollateFunction(crop_sizes=[input_size, input_size // 2])
 
@@ -1113,30 +1115,30 @@ class VICReg(KNNBenchmarkModule):
 
 def main():
     models = [
+        BYOL,
         # Contrastive Learning
         SimCLR,
         MoCo,
         DCLW,
         # Clustering
-        SwaV,
+        # SwaV,
         # Distillation
-        BYOL,
+        # DINO,
+        # DINOViT,
+        # Redundancy Reduction
+        VICReg,
+        BarlowTwins,
+        # Mask Denoising
+        # MSN,
+        # PMSN,
+        # Masked Image Modeling
+        # MAE,
+        MAE2,  # Same as MAE but with all transforms
+        # SimMIM,
+        # Supervised
+        # SupervisedR18,
         SimSiam,
         FastSiam,
-        DINO,
-        DINOViT,
-        # Redundancy Reduction
-        BarlowTwins,
-        VICReg,
-        # Mask Denoising
-        MSN,
-        PMSN,
-        # Masked Image Modeling
-        MAE,
-        MAE2,  # Same as MAE but with all transforms
-        SimMIM,
-        # Supervised
-        SupervisedR18,
     ]
     bench_results = dict()
 
