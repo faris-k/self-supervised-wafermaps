@@ -1,6 +1,42 @@
+import copy
 import os
-import sys
 import warnings
+
+import lightly
+import numpy as np
+import pandas as pd
+import pytorch_lightning as pl
+import timm
+import torch
+import torch.nn as nn
+import torchvision
+from lightly.data import LightlyDataset
+from lightly.models import utils
+from lightly.models.modules import heads, masked_autoencoder
+from lightly.utils import debug, scheduler
+from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, RichProgressBar
+from pytorch_lightning.loggers import TensorBoardLogger
+from sklearn.preprocessing import StandardScaler
+from timm.optim.lars import Lars
+from torch import nn
+from torch.utils.data import DataLoader
+from torchmetrics.classification import (
+    MultilabelAccuracy,
+    MultilabelAUROC,
+    MultilabelF1Score,
+)
+
+from ssl_wafermap.utilities.data import TensorDataset, WaferMapDataset
+from ssl_wafermap.utilities.transforms import (
+    get_base_transforms,
+    get_inference_transforms,
+)
+
+torch.set_float32_matmul_precision("high")
+
+# Ignore annoying pytorch lightning warnings
+warnings.filterwarnings("ignore", ".*many workers.*")
+warnings.filterwarnings("ignore", ".*meaningless.*")
 
 import numpy as np
 import pandas as pd
@@ -9,6 +45,7 @@ import timm
 import torch
 import torch.nn as nn
 from lightly.data import LightlyDataset
+from lightly.utils import debug, scheduler
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, RichProgressBar
 from pytorch_lightning.loggers import TensorBoardLogger
 from sklearn.preprocessing import StandardScaler
@@ -20,6 +57,7 @@ from torchmetrics.classification import (
     MultilabelF1Score,
 )
 
+# from ssl_wafermap.models.ssl import BYOL, DCLW, MAE, MSN, DINOViT, SwaV, VICReg
 from ssl_wafermap.utilities.data import TensorDataset, WaferMapDataset
 from ssl_wafermap.utilities.transforms import (
     get_base_transforms,
@@ -208,7 +246,474 @@ class MultilabelLinearClassifier(pl.LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=1e-2)
+        # optimizer = torch.optim.SGD(self.parameters(), lr=0.05, momentum=0.9)
         return optimizer
+
+
+class TwoLayerMultilabelClassifier(MultilabelLinearClassifier):
+    def __init__(self, num_features, num_classes=8, pos_weight=None):
+        super().__init__(
+            num_features=num_features, num_classes=num_classes, pos_weight=pos_weight
+        )
+        self.model = nn.Sequential(
+            nn.Linear(self.num_features, 256),
+            nn.LeakyReLU(),
+            nn.Dropout(p=0.5),
+            nn.Linear(256, self.num_classes),
+        )
+
+
+max_epochs = 150
+input_size = 224
+
+#  Set to True to enable Distributed Data Parallel training.
+distributed = False
+
+# Set to True to enable Mixed Precision training.
+use_amp = True
+
+# Set to True to enable Synchronized Batch Norm (requires distributed=True).
+# If enabled the batch norm is calculated over all gpus, otherwise the batch
+# norm is only calculated from samples on the same gpu.
+sync_batchnorm = False
+
+# Set to True to gather features from all gpus before calculating
+# the loss (requires distributed=True).
+# If enabled then the loss on every gpu is calculated with features from all
+# gpus, otherwise only features from the same gpu are used.
+gather_distributed = False
+
+n_runs = 1  # optional, increase to create multiple runs and report mean + std
+batch_size = 64
+lr_factor = batch_size / 256  #  scales the learning rate linearly with batch size
+
+
+class DINOViT(pl.LightningModule):
+    def __init__(self):
+        super().__init__()
+        self.backbone = torch.hub.load(
+            "facebookresearch/dino:main", "dino_vits16", pretrained=False
+        )
+        feature_dim = self.backbone.embed_dim
+
+        self.head = heads.DINOProjectionHead(
+            feature_dim, 2048, 256, 2048, batch_norm=False
+        )
+        self.teacher_backbone = copy.deepcopy(self.backbone)
+        self.teacher_head = heads.DINOProjectionHead(
+            feature_dim, 2048, 256, 2048, batch_norm=False
+        )
+
+        utils.deactivate_requires_grad(self.teacher_backbone)
+        utils.deactivate_requires_grad(self.teacher_head)
+
+        self.criterion = lightly.loss.DINOLoss(output_dim=2048)
+        self.warmup_epochs = 40 if max_epochs >= 800 else 20
+
+    def forward(self, x):
+        y = self.backbone(x).flatten(start_dim=1)
+        z = self.head(y)
+        self.log("rep_std", debug.std_of_l2_normalized(y))
+        return z
+
+    def forward_teacher(self, x):
+        y = self.teacher_backbone(x).flatten(start_dim=1)
+        z = self.teacher_head(y)
+        return z
+
+    def training_step(self, batch, batch_idx):
+        utils.update_momentum(self.backbone, self.teacher_backbone, m=0.99)
+        utils.update_momentum(self.head, self.teacher_head, m=0.99)
+        views, _, _ = batch
+        views = [view.to(self.device) for view in views]
+        global_views = views[:2]
+        teacher_out = [self.forward_teacher(view) for view in global_views]
+        student_out = [self.forward(view) for view in views]
+        loss = self.criterion(teacher_out, student_out, epoch=self.current_epoch)
+        self.log("train_loss_ssl", loss)
+        return loss
+
+    # Trying out AdamW; authors recommend using this with ViT
+    def configure_optimizers(self):
+        param = list(self.backbone.parameters()) + list(self.head.parameters())
+        optim = torch.optim.AdamW(
+            param,
+            lr=1.5e-4 * lr_factor,
+            weight_decay=0.05,
+            betas=(0.9, 0.95),
+        )
+        cosine_scheduler = scheduler.CosineWarmupScheduler(
+            optim, self.warmup_epochs, max_epochs
+        )
+        return [optim], [cosine_scheduler]
+
+    def predict_step(self, batch, batch_idx):
+        images, _, _ = batch
+        return self.backbone(images)
+
+
+class SwaV(pl.LightningModule):
+    def __init__(self):
+        super().__init__()
+        # create a ResNet backbone and remove the classification head
+        self.backbone = timm.create_model("resnet18", num_classes=0, pretrained=False)
+        feature_dim = self.backbone.num_features
+
+        self.projection_head = heads.SwaVProjectionHead(feature_dim, 2048, 128)
+        self.prototypes = heads.SwaVPrototypes(128, 3000)  # use 3000 prototypes
+
+        self.criterion = lightly.loss.SwaVLoss(
+            sinkhorn_gather_distributed=gather_distributed
+        )
+
+    def forward(self, x):
+        x = self.backbone(x).flatten(start_dim=1)
+        self.log("rep_std", debug.std_of_l2_normalized(x))
+        x = self.projection_head(x)
+        x = nn.functional.normalize(x, dim=1, p=2)
+        return self.prototypes(x)
+
+    def training_step(self, batch, batch_idx):
+        # normalize the prototypes so they are on the unit sphere
+        self.prototypes.normalize()
+
+        # the multi-crop dataloader returns a list of image crops where the
+        # first two items are the high resolution crops and the rest are low
+        # resolution crops
+        multi_crops, _, _ = batch
+        multi_crop_features = [self.forward(x) for x in multi_crops]
+
+        # split list of crop features into high and low resolution
+        high_resolution_features = multi_crop_features[:2]
+        low_resolution_features = multi_crop_features[2:]
+
+        # calculate the SwaV loss
+        loss = self.criterion(high_resolution_features, low_resolution_features)
+
+        self.log("train_loss_ssl", loss)
+        return loss
+
+    def configure_optimizers(self):
+        optim = torch.optim.Adam(
+            self.parameters(),
+            lr=1e-3 * lr_factor,
+            weight_decay=1e-6,
+        )
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, max_epochs)
+        return [optim], [scheduler]
+
+    def predict_step(self, batch, batch_idx):
+        images, _, _ = batch
+        return self.backbone(images)
+
+
+class MAE(pl.LightningModule):
+    def __init__(self):
+        super().__init__()
+
+        decoder_dim = 512
+        vit = torchvision.models.vit_b_32()
+
+        self.warmup_epochs = 40 if max_epochs >= 800 else 20
+        self.mask_ratio = 0.75
+        self.patch_size = vit.patch_size
+        self.sequence_length = vit.seq_length
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, decoder_dim))
+        self.backbone = masked_autoencoder.MAEBackbone.from_vit(vit)
+        self.decoder = masked_autoencoder.MAEDecoder(
+            seq_length=vit.seq_length,
+            num_layers=1,
+            num_heads=16,
+            embed_input_dim=vit.hidden_dim,
+            hidden_dim=decoder_dim,
+            mlp_dim=decoder_dim * 4,
+            out_dim=vit.patch_size**2 * 3,
+            dropout=0,
+            attention_dropout=0,
+        )
+        self.criterion = nn.MSELoss()
+
+    def forward_encoder(self, images, idx_keep=None):
+        out = self.backbone.encode(images, idx_keep)
+        self.log("rep_std", debug.std_of_l2_normalized(out.flatten(1)))
+        return out
+
+    def forward_decoder(self, x_encoded, idx_keep, idx_mask):
+        # build decoder input
+        batch_size = x_encoded.shape[0]
+        x_decode = self.decoder.embed(x_encoded)
+        x_masked = utils.repeat_token(
+            self.mask_token, (batch_size, self.sequence_length)
+        )
+        x_masked = utils.set_at_index(x_masked, idx_keep, x_decode.type_as(x_masked))
+
+        # decoder forward pass
+        x_decoded = self.decoder.decode(x_masked)
+
+        # predict pixel values for masked tokens
+        x_pred = utils.get_at_index(x_decoded, idx_mask)
+        x_pred = self.decoder.predict(x_pred)
+        return x_pred
+
+    def training_step(self, batch, batch_idx):
+        images, _, _ = batch
+
+        batch_size = images.shape[0]
+        idx_keep, idx_mask = utils.random_token_mask(
+            size=(batch_size, self.sequence_length),
+            mask_ratio=self.mask_ratio,
+            device=images.device,
+        )
+        x_encoded = self.forward_encoder(images, idx_keep)
+        x_pred = self.forward_decoder(x_encoded, idx_keep, idx_mask)
+
+        # get image patches for masked tokens
+        patches = utils.patchify(images, self.patch_size)
+        # must adjust idx_mask for missing class token
+        target = utils.get_at_index(patches, idx_mask - 1)
+
+        loss = self.criterion(x_pred, target)
+        self.log("train_loss_ssl", loss)
+        return loss
+
+    def configure_optimizers(self):
+        optim = torch.optim.AdamW(
+            self.parameters(),
+            lr=1.5e-4 * lr_factor,
+            weight_decay=0.05,
+            betas=(0.9, 0.95),
+        )
+        cosine_scheduler = scheduler.CosineWarmupScheduler(
+            optim, self.warmup_epochs, max_epochs
+        )
+        return [optim], [cosine_scheduler]
+
+    def predict_step(self, batch, batch_idx):
+        images, _, _ = batch
+        return self.backbone(images)
+
+
+class DCLW(pl.LightningModule):
+    def __init__(self):
+        super().__init__()
+        # create a ResNet backbone and remove the classification head
+        self.backbone = timm.create_model("resnet18", num_classes=0, pretrained=False)
+        feature_dim = self.backbone.num_features
+        self.projection_head = heads.SimCLRProjectionHead(feature_dim, feature_dim, 128)
+        self.criterion = lightly.loss.DCLWLoss()
+
+    def forward(self, x):
+        x = self.backbone(x).flatten(start_dim=1)
+        z = self.projection_head(x)
+        self.log("rep_std", debug.std_of_l2_normalized(x))
+        return z
+
+    def training_step(self, batch, batch_index):
+        (x0, x1), _, _ = batch
+        z0 = self.forward(x0)
+        z1 = self.forward(x1)
+        loss = self.criterion(z0, z1)
+        self.log("train_loss_ssl", loss)
+        return loss
+
+    def configure_optimizers(self):
+        optim = torch.optim.SGD(
+            self.parameters(), lr=6e-2 * lr_factor, momentum=0.9, weight_decay=5e-4
+        )
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, max_epochs)
+        return [optim], [scheduler]
+
+    def predict_step(self, batch, batch_idx):
+        images, _, _ = batch
+        return self.backbone(images)
+
+
+class VICReg(pl.LightningModule):
+    def __init__(self):
+        super().__init__()
+        # create a ResNet backbone and remove the classification head
+        self.backbone = timm.create_model("resnet18", num_classes=0, pretrained=False)
+        feature_dim = self.backbone.num_features
+        self.projection_head = heads.BarlowTwinsProjectionHead(feature_dim, 2048, 2048)
+        self.criterion = lightly.loss.VICRegLoss()
+        self.warmup_epochs = 40 if max_epochs >= 800 else 20
+
+    def forward(self, x):
+        x = self.backbone(x).flatten(start_dim=1)
+        z = self.projection_head(x)
+        self.log("rep_std", debug.std_of_l2_normalized(x))
+        return z
+
+    def training_step(self, batch, batch_index):
+        (x0, x1), _, _ = batch
+        z0 = self.forward(x0)
+        z1 = self.forward(x1)
+        loss = self.criterion(z0, z1)
+        self.log("train_loss_ssl", loss)
+        return loss
+
+    def configure_optimizers(self):
+        optim = Lars(
+            self.parameters(), lr=0.3 * lr_factor, weight_decay=1e-4, momentum=0.9
+        )
+        cosine_scheduler = scheduler.CosineWarmupScheduler(
+            optim, self.warmup_epochs, max_epochs
+        )
+        return [optim], [cosine_scheduler]
+
+    def predict_step(self, batch, batch_idx):
+        images, _, _ = batch
+        return self.backbone(images)
+
+
+class BYOL(pl.LightningModule):
+    def __init__(self):
+        super().__init__()
+        # create a ResNet backbone and remove the classification head
+        self.backbone = timm.create_model("resnet18", num_classes=0, pretrained=False)
+        feature_dim = self.backbone.num_features
+
+        # create a byol model based on ResNet
+        self.projection_head = heads.BYOLProjectionHead(feature_dim, 4096, 256)
+        self.prediction_head = heads.BYOLPredictionHead(256, 4096, 256)
+
+        self.backbone_momentum = copy.deepcopy(self.backbone)
+        self.projection_head_momentum = copy.deepcopy(self.projection_head)
+
+        utils.deactivate_requires_grad(self.backbone_momentum)
+        utils.deactivate_requires_grad(self.projection_head_momentum)
+
+        self.criterion = lightly.loss.NegativeCosineSimilarity()
+
+    def forward(self, x):
+        y = self.backbone(x).flatten(start_dim=1)
+        z = self.projection_head(y)
+        p = self.prediction_head(z)
+        self.log("rep_std", debug.std_of_l2_normalized(y))
+        return p
+
+    def forward_momentum(self, x):
+        y = self.backbone_momentum(x).flatten(start_dim=1)
+        z = self.projection_head_momentum(y)
+        z = z.detach()
+        return z
+
+    def training_step(self, batch, batch_idx):
+        utils.update_momentum(self.backbone, self.backbone_momentum, m=0.99)
+        utils.update_momentum(
+            self.projection_head, self.projection_head_momentum, m=0.99
+        )
+        (x0, x1), _, _ = batch
+        p0 = self.forward(x0)
+        z0 = self.forward_momentum(x0)
+        p1 = self.forward(x1)
+        z1 = self.forward_momentum(x1)
+        loss = 0.5 * (self.criterion(p0, z1) + self.criterion(p1, z0))
+        self.log("train_loss_ssl", loss)
+        return loss
+
+    def configure_optimizers(self):
+        params = (
+            list(self.backbone.parameters())
+            + list(self.projection_head.parameters())
+            + list(self.prediction_head.parameters())
+        )
+        optim = torch.optim.SGD(
+            params,
+            lr=6e-2 * lr_factor,
+            momentum=0.9,
+            weight_decay=5e-4,
+        )
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, max_epochs)
+        return [optim], [scheduler]
+
+    def predict_step(self, batch, batch_idx):
+        images, _, _ = batch
+        return self.backbone(images)
+
+
+class MSN(pl.LightningModule):
+    def __init__(self):
+        super().__init__()
+
+        self.warmup_epochs = 15
+        #  ViT small configuration (ViT-S/16) = dict(patch_size=16, embed_dim=384, depth=12, num_heads=6)
+        #  ViT tiny configuration (ViT-T/16) = dict(patch_size=16, embed_dim=192, depth=12, num_heads=3)
+        self.mask_ratio = 0.15
+        self.backbone = masked_autoencoder.MAEBackbone(
+            image_size=224,
+            patch_size=16,
+            num_layers=12,
+            num_heads=6,
+            hidden_dim=384,
+            mlp_dim=384 * 4,
+        )
+        self.projection_head = heads.MSNProjectionHead(384)
+
+        self.anchor_backbone = copy.deepcopy(self.backbone)
+        self.anchor_projection_head = copy.deepcopy(self.projection_head)
+
+        utils.deactivate_requires_grad(self.backbone)
+        utils.deactivate_requires_grad(self.projection_head)
+
+        self.prototypes = nn.Linear(256, 1024, bias=False).weight
+        self.criterion = lightly.loss.MSNLoss()
+
+    def training_step(self, batch, batch_idx):
+        utils.update_momentum(self.anchor_backbone, self.backbone, 0.996)
+        utils.update_momentum(self.anchor_projection_head, self.projection_head, 0.996)
+
+        views, _, _ = batch
+        views = [view.to(self.device, non_blocking=True) for view in views]
+        targets = views[0]
+        anchors = views[1]
+        anchors_focal = torch.concat(views[2:], dim=0)
+
+        targets_out = self.backbone(targets)
+        targets_out = self.projection_head(targets_out)
+        anchors_out = self.encode_masked(anchors)
+        anchors_focal_out = self.encode_masked(anchors_focal)
+        anchors_out = torch.cat([anchors_out, anchors_focal_out], dim=0)
+
+        loss = self.criterion(anchors_out, targets_out, self.prototypes.data)
+        self.log("train_loss_ssl", loss)
+        self.log(
+            "rep_std",
+            debug.std_of_l2_normalized(targets_out.flatten(1)),
+        )
+        return loss
+
+    def encode_masked(self, anchors):
+        batch_size, _, _, width = anchors.shape
+        seq_length = (width // self.anchor_backbone.patch_size) ** 2
+        idx_keep, _ = utils.random_token_mask(
+            size=(batch_size, seq_length),
+            mask_ratio=self.mask_ratio,
+            device=self.device,
+        )
+        out = self.anchor_backbone(anchors, idx_keep)
+        return self.anchor_projection_head(out)
+
+    def configure_optimizers(self):
+        params = [
+            *list(self.anchor_backbone.parameters()),
+            *list(self.anchor_projection_head.parameters()),
+            self.prototypes,
+        ]
+        optim = torch.optim.AdamW(
+            params=params,
+            lr=1.5e-4 * lr_factor,
+            weight_decay=0.05,
+            betas=(0.9, 0.95),
+        )
+        cosine_scheduler = scheduler.CosineWarmupScheduler(
+            optim, self.warmup_epochs, max_epochs
+        )
+        return [optim], [cosine_scheduler]
+
+    def predict_step(self, batch, batch_idx):
+        images, _, _ = batch
+        return self.backbone(images)
 
 
 val_dataset = WaferMapDataset(
@@ -399,82 +904,132 @@ def linear_probe(
     linear_model = MultilabelLinearClassifier(
         num_features=train_features.shape[1], pos_weight=pos_weight
     )
+    two_layer_model = TwoLayerMultilabelClassifier(
+        num_features=train_features.shape[1], pos_weight=pos_weight
+    )
 
     logger = TensorBoardLogger(
         save_dir=f"../models/mixedwm38_finetune/{model_name}",
         name="",
-        sub_dir=train_split_name,
+        sub_dir=f"{train_split_name}/linear",
     )
     checkpoint_callback = ModelCheckpoint(
         dirpath=os.path.join(logger.log_dir, "checkpoints"),
     )
-
     supervised_trainer = pl.Trainer(
         accelerator="gpu",
-        max_epochs=100,
+        enable_model_summary=False,
+        max_epochs=max_epochs_probe,
         precision="16-mixed" if use_amp else "32-true",
         callbacks=[
-            EarlyStopping(monitor="val_loss", patience=15, mode="min"),
+            EarlyStopping(monitor="val_loss", patience=50, mode="min"),
             RichProgressBar(),
             checkpoint_callback,
         ],
         logger=logger,
         benchmark=True,
     )
-
     supervised_trainer.fit(
         linear_model, train_dataloaders=train_loader, val_dataloaders=val_loader
     )
-    supervised_trainer.test(linear_model, test_loader)
+    supervised_trainer.test(linear_model, test_loader, ckpt_path="best")
+
+    logger = TensorBoardLogger(
+        save_dir=f"../models/mixedwm38_finetune/{model_name}",
+        name="",
+        sub_dir=f"{train_split_name}/2layer",
+    )
+    checkpoint_callback = ModelCheckpoint(
+        dirpath=os.path.join(logger.log_dir, "checkpoints"),
+    )
+    supervised_trainer = pl.Trainer(
+        accelerator="gpu",
+        enable_model_summary=False,
+        max_epochs=max_epochs_probe,
+        precision="16-mixed" if use_amp else "32-true",
+        callbacks=[
+            EarlyStopping(monitor="val_loss", patience=50, mode="min"),
+            RichProgressBar(),
+            checkpoint_callback,
+        ],
+        logger=logger,
+        benchmark=True,
+    )
+    supervised_trainer.fit(
+        two_layer_model, train_dataloaders=train_loader, val_dataloaders=val_loader
+    )
+    supervised_trainer.test(two_layer_model, test_loader, ckpt_path="best")
+
+
+ckpt_dict = {
+    "SwaV": (
+        SwaV,
+        "../models/mixed_wm38_pretrain/wafermaps/version_2/SwaV/checkpoints/epoch=149-step=62250.ckpt",
+    ),
+    "BYOL": (
+        BYOL,
+        "../models/mixed_wm38_pretrain/wafermaps/version_2/BYOL/checkpoints/epoch=149-step=62250.ckpt",
+    ),
+    "DCLW": (
+        DCLW,
+        "../models/mixed_wm38_pretrain/wafermaps/version_2/DCLW/checkpoints/epoch=149-step=62250.ckpt",
+    ),
+    "DINOViT": (
+        DINOViT,
+        "../models/mixed_wm38_pretrain/wafermaps/version_2/DINOViT/checkpoints/epoch=74-step=31125.ckpt",
+    ),
+    "MAE": (
+        MAE,
+        "../models/mixed_wm38_pretrain/wafermaps/version_2/MAE/checkpoints/epoch=149-step=62250.ckpt",
+    ),
+    "MSN": (
+        MSN,
+        "../models/mixed_wm38_pretrain/wafermaps/version_2/MSN/checkpoints/epoch=149-step=62250.ckpt",
+    ),
+    "VICReg": (
+        VICReg,
+        "../models/mixed_wm38_pretrain/wafermaps/version_2/VICReg/checkpoints/epoch=149-step=62250.ckpt",
+    ),
+}
 
 
 def linear_probe_ssl():
-    ckpt_dir = "../models/mixed_wm38_pretrain/wafermaps/version_2/"
-    for subdir, dirs, files in os.walk(ckpt_dir):
-        for file in files:
-            if file.endswith(".ckpt"):
-                ckpt_path = os.path.join(subdir, file)
+    for model_name, (model_class, ckpt_path) in ckpt_dict.items():
+        model = model_class.load_from_checkpoint(ckpt_path)
+        print(f"Loaded {model_name} from checkpoint")
 
-                model_name = ckpt_path.split("version_2/")[-1].split("\\")[0]
-                print(model_name)
+        inference_trainer = pl.Trainer(
+            accelerator="auto",
+            precision="16-mixed" if use_amp else "32-true",
+            enable_checkpointing=False,
+            enable_model_summary=False,
+            # enable_progress_bar=False,
+            inference_mode=True,
+            logger=False,
+            callbacks=[RichProgressBar()],
+        )
 
-                ModelClass = getattr(sys.modules[__name__], model_name)
+        print("Predicting on validation set")
+        val_features = inference_trainer.predict(model, ssl_val_loader)
+        print("Predicting on test set")
+        test_features = inference_trainer.predict(model, ssl_test_loader)
 
-                model = ModelClass()
-                model.load_state_dict(torch.load(ckpt_path)["state_dict"])
+        val_features = torch.cat(val_features, dim=0)
+        test_features = torch.cat(test_features, dim=0)
 
-                # model = ModelClass.load_from_checkpoint(ckpt_path)
-
-                print(f"Loaded {model_name} from checkpoint")
-
-                inference_trainer = pl.Trainer(
-                    accelerator="auto",
-                    precision="16-mixed" if use_amp else "32-true",
-                    enable_checkpointing=False,
-                    enable_model_summary=False,
-                    # enable_progress_bar=False,
-                    inference_mode=True,
-                    logger=False,
-                )
-
-                val_features = inference_trainer.predict(model, ssl_val_loader)
-                test_features = inference_trainer.predict(model, ssl_test_loader)
-
-                val_features = torch.cat(val_features, dim=0)
-                test_features = torch.cat(test_features, dim=0)
-
-                for train_split_name, train_df in train_data.items():
-                    linear_probe(
-                        model,
-                        model_name,
-                        train_df,
-                        train_split_name,
-                        inference_trainer,
-                        val_features,
-                        test_features,
-                    )
+        for train_split_name, train_df in train_splits.items():
+            print(f"Training linear probe on {train_split_name}")
+            linear_probe(
+                model,
+                model_name,
+                train_df,
+                train_split_name,
+                inference_trainer,
+                val_features,
+                test_features,
+            )
 
 
 if __name__ == "__main__":
-    # train_supervised()
     linear_probe_ssl()
+    train_supervised()
