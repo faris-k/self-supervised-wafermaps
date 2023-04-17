@@ -50,7 +50,7 @@ logs_root_dir = "../models/benchmark_logs"
 num_workers = 2  # os.cpu_count()
 memory_bank_size = 4096
 
-subset = True  # Whether to benchmark using a subset of the dataset
+subset = False  # Whether to benchmark using a subset of the dataset
 max_epochs = 5 if subset else 150
 knn_k = 5  # sweep of knn_k values leads to best performance at k=5
 knn_t = 0.1
@@ -1115,11 +1115,11 @@ class VICReg(KNNBenchmarkModule):
 
 def main():
     models = [
-        BYOL,
+        # BYOL,
         # Contrastive Learning
-        SimCLR,
-        MoCo,
-        DCLW,
+        # SimCLR,
+        # MoCo,
+        # DCLW,
         # Clustering
         # SwaV,
         # Distillation
@@ -1127,18 +1127,18 @@ def main():
         # DINOViT,
         # Redundancy Reduction
         VICReg,
-        BarlowTwins,
+        # BarlowTwins,
         # Mask Denoising
         # MSN,
         # PMSN,
         # Masked Image Modeling
         # MAE,
-        MAE2,  # Same as MAE but with all transforms
+        # MAE2,  # Same as MAE but with all transforms
         # SimMIM,
         # Supervised
         # SupervisedR18,
-        SimSiam,
-        FastSiam,
+        # SimSiam,
+        # FastSiam,
     ]
     bench_results = dict()
 
