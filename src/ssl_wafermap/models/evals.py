@@ -12,21 +12,21 @@ from torchmetrics.classification import (
 
 
 class LinearClassifier(pl.LightningModule):
-    def __init__(self, num_features, num_classes=8, weight=None):
+    def __init__(self, num_features, num_classes=9, weight=None):
         super().__init__()
 
         self.model = nn.Linear(num_features, num_classes)
 
         self.criterion = nn.CrossEntropyLoss(weight=weight)
 
-        self.train_acc = MulticlassAccuracy(num_labels=num_classes)
-        self.train_f1 = MulticlassF1Score(num_labels=num_classes)
+        self.train_acc = MulticlassAccuracy(num_classes=num_classes)
+        self.train_f1 = MulticlassF1Score(num_classes=num_classes)
 
-        self.val_acc = MulticlassAccuracy(num_labels=num_classes)
-        self.val_f1 = MulticlassF1Score(num_labels=num_classes)
+        self.val_acc = MulticlassAccuracy(num_classes=num_classes)
+        self.val_f1 = MulticlassF1Score(num_classes=num_classes)
 
-        self.test_acc = MulticlassAccuracy(num_labels=num_classes)
-        self.test_f1 = MulticlassF1Score(num_labels=num_classes)
+        self.test_acc = MulticlassAccuracy(num_classes=num_classes)
+        self.test_f1 = MulticlassF1Score(num_classes=num_classes)
 
     def forward(self, x):
         return self.model(x)
@@ -34,7 +34,7 @@ class LinearClassifier(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         x, y = batch
         y_hat = self(x)
-        loss = self.criterion(y_hat, y.float())
+        loss = self.criterion(y_hat, y)
 
         self.train_acc(y_hat, y)
         self.train_f1(y_hat, y)
@@ -50,7 +50,7 @@ class LinearClassifier(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         x, y = batch
         y_hat = self(x)
-        loss = self.criterion(y_hat, y.float())
+        loss = self.criterion(y_hat, y)
 
         self.val_acc(y_hat, y)
         self.val_f1(y_hat, y)
@@ -71,7 +71,7 @@ class LinearClassifier(pl.LightningModule):
         self.log("test_f1", self.test_f1, on_epoch=True, prog_bar=True)
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=1e-2)
+        optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
         # optimizer = torch.optim.SGD(self.parameters(), lr=0.05, momentum=0.9)
         return optimizer
 
