@@ -1,3 +1,3 @@
 # Contributors
 
-* Faris Khan [khanmohammedfaris@gmail.com](mailto:khanmohammedfaris@gmail.com)
+* Faris Khan [@faris-k](https://github.com/faris-k)
