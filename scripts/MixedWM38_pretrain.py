@@ -94,21 +94,13 @@ dataset_train_ssl = LightlyDataset.from_torch_dataset(
 
 # Base collate function for basic joint embedding frameworks
 # e.g. SimCLR, MoCo, BYOL, Barlow Twins, DCLW, SimSiam
-collate_fn = WaferImageCollateFunction(
-    denoise=True,
-)
+collate_fn = WaferImageCollateFunction(denoise=True)
 
-# DINO, MAE, and MSN will use their own collate functions
-dino_collate_fn = WaferDINOCOllateFunction(
-    global_crop_size=input_size, local_crop_size=input_size // 2, denoise=True
-)
-mae2_collate_fn = WaferMAECollateFunction2(denoise=True)
-msn_collate_fn = WaferMSNCollateFunction(
-    random_size=input_size, focal_size=input_size // 2, denoise=True
-)
-swav_collate_fn = WaferSwaVCollateFunction(
-    crop_sizes=[input_size, input_size // 2], denoise=True
-)
+# DINO, MAE, MSN, SwAV will use their own collate functions
+dino_collate_fn = WaferDINOCOllateFunction(denoise=True)
+mae_collate_fn = WaferMAECollateFunction2(denoise=True)
+msn_collate_fn = WaferMSNCollateFunction(denoise=True)
+swav_collate_fn = WaferSwaVCollateFunction(denoise=True)
 
 
 def get_data_loader(batch_size: int, model):
@@ -123,7 +115,7 @@ def get_data_loader(batch_size: int, model):
     if model == DINOViT:
         col_fn = dino_collate_fn
     elif model == MAE:
-        col_fn = mae2_collate_fn
+        col_fn = mae_collate_fn
     elif model == MSN:
         col_fn = msn_collate_fn
     elif model == SwaV:
@@ -585,7 +577,7 @@ def main():
         MAE,
         # Distillation
         BYOL,
-        # DINOViT,
+        DINOViT,
     ]
     results = dict()
 
@@ -616,7 +608,6 @@ def main():
                 experiment_version = logger.version
             checkpoint_callback = pl.callbacks.ModelCheckpoint(
                 dirpath=os.path.join(logger.log_dir, "checkpoints"),
-                # every_n_epochs=max_epochs // 5,
             )
 
             trainer = pl.Trainer(
@@ -630,7 +621,6 @@ def main():
                 callbacks=[checkpoint_callback],
                 enable_progress_bar=True,
                 precision="16-mixed" if use_amp else "32-true",
-                benchmark=True,
             )
             start = time.time()
             trainer.fit(
