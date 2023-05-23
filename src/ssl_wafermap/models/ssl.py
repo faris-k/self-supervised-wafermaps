@@ -23,7 +23,7 @@ max_epochs = 150
 
 
 class SupervisedR18(pl.LightningModule):
-    def __init(self):
+    def __init__(self):
         super().__init__()
         self.backbone = timm.create_model("resnet18", num_classes=0, pretrained=False)
         self.fc = timm.create_model("resnet18", num_classes=9).get_classifier()
@@ -51,7 +51,7 @@ class SupervisedR18(pl.LightningModule):
 
 
 class MoCo(pl.LightningModule):
-    def __init(self):
+    def __init__(self):
         super().__init__()
         # create a ResNet backbone and remove the classification head
         self.backbone = timm.create_model("resnet18", num_classes=0, pretrained=False)
@@ -105,10 +105,7 @@ class MoCo(pl.LightningModule):
             self.projection_head.parameters()
         )
         optim = torch.optim.SGD(
-            params,
-            lr=6e-2 * lr_factor,
-            momentum=0.9,
-            weight_decay=5e-4,
+            params, lr=6e-2 * lr_factor, momentum=0.9, weight_decay=5e-4,
         )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, max_epochs)
         return [optim], [scheduler]
@@ -119,7 +116,7 @@ class MoCo(pl.LightningModule):
 
 
 class SimCLR(pl.LightningModule):
-    def __init(self):
+    def __init__(self):
         super().__init__()
         # create a ResNet backbone and remove the classification head
         self.backbone = timm.create_model("resnet18", num_classes=0, pretrained=False)
@@ -154,7 +151,7 @@ class SimCLR(pl.LightningModule):
 
 
 class SimSiam(pl.LightningModule):
-    def __init(self):
+    def __init__(self):
         super().__init__()
         # create a ResNet backbone and remove the classification head
         self.backbone = timm.create_model("resnet18", num_classes=0, pretrained=False)
@@ -195,7 +192,7 @@ class SimSiam(pl.LightningModule):
 
 
 class FastSiam(SimSiam):
-    def __init(self):
+    def __init__(self):
         super().__init__()
 
     # Only the training_step is different
@@ -215,7 +212,7 @@ class FastSiam(SimSiam):
 
 
 class BarlowTwins(pl.LightningModule):
-    def __init(self):
+    def __init__(self):
         super().__init__()
         # create a ResNet backbone and remove the classification head
         self.backbone = timm.create_model("resnet18", num_classes=0, pretrained=False)
@@ -256,7 +253,7 @@ class BarlowTwins(pl.LightningModule):
 
 
 class BYOL(pl.LightningModule):
-    def __init(self):
+    def __init__(self):
         super().__init__()
         # create a ResNet backbone and remove the classification head
         self.backbone = timm.create_model("resnet18", num_classes=0, pretrained=False)
@@ -308,10 +305,7 @@ class BYOL(pl.LightningModule):
             + list(self.prediction_head.parameters())
         )
         optim = torch.optim.SGD(
-            params,
-            lr=6e-2 * lr_factor,
-            momentum=0.9,
-            weight_decay=5e-4,
+            params, lr=6e-2 * lr_factor, momentum=0.9, weight_decay=5e-4,
         )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, max_epochs)
         return [optim], [scheduler]
@@ -322,7 +316,7 @@ class BYOL(pl.LightningModule):
 
 
 class DINO(pl.LightningModule):
-    def __init(self):
+    def __init__(self):
         super().__init__()
         self.backbone = timm.create_model("resnet18", num_classes=0, pretrained=False)
         feature_dim = self.backbone.num_features
@@ -366,10 +360,7 @@ class DINO(pl.LightningModule):
     def configure_optimizers(self):
         param = list(self.backbone.parameters()) + list(self.head.parameters())
         optim = torch.optim.SGD(
-            param,
-            lr=6e-2 * lr_factor,
-            momentum=0.9,
-            weight_decay=5e-4,
+            param, lr=6e-2 * lr_factor, momentum=0.9, weight_decay=5e-4,
         )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, max_epochs)
         return [optim], [scheduler]
@@ -380,7 +371,7 @@ class DINO(pl.LightningModule):
 
 
 class DINOViT(pl.LightningModule):
-    def __init(self):
+    def __init__(self):
         super().__init__()
         self.backbone = torch.hub.load(
             "facebookresearch/dino:main", "dino_vits16", pretrained=False
@@ -428,10 +419,7 @@ class DINOViT(pl.LightningModule):
     def configure_optimizers(self):
         param = list(self.backbone.parameters()) + list(self.head.parameters())
         optim = torch.optim.AdamW(
-            param,
-            lr=1.5e-4 * lr_factor,
-            weight_decay=0.05,
-            betas=(0.9, 0.95),
+            param, lr=1.5e-4 * lr_factor, weight_decay=0.05, betas=(0.9, 0.95),
         )
         cosine_scheduler = scheduler.CosineWarmupScheduler(
             optim, self.warmup_epochs, max_epochs
@@ -444,7 +432,7 @@ class DINOViT(pl.LightningModule):
 
 
 class MAE(pl.LightningModule):
-    def __init(self):
+    def __init__(self):
         super().__init__()
 
         decoder_dim = 512
@@ -463,7 +451,7 @@ class MAE(pl.LightningModule):
             embed_input_dim=vit.hidden_dim,
             hidden_dim=decoder_dim,
             mlp_dim=decoder_dim * 4,
-            out_dim=vit.patch_size**2 * 3,
+            out_dim=vit.patch_size ** 2 * 3,
             dropout=0,
             attention_dropout=0,
         )
@@ -530,7 +518,7 @@ class MAE(pl.LightningModule):
 
 
 class MAE2(pl.LightningModule):
-    def __init(self):
+    def __init__(self):
         super().__init__()
 
         decoder_dim = 512
@@ -549,7 +537,7 @@ class MAE2(pl.LightningModule):
             embed_input_dim=vit.hidden_dim,
             hidden_dim=decoder_dim,
             mlp_dim=decoder_dim * 4,
-            out_dim=vit.patch_size**2 * 3,
+            out_dim=vit.patch_size ** 2 * 3,
             dropout=0,
             attention_dropout=0,
         )
@@ -616,7 +604,7 @@ class MAE2(pl.LightningModule):
 
 
 class SimMIM(pl.LightningModule):
-    def __init(self):
+    def __init__(self):
         super().__init__()
 
         vit = torchvision.models.vit_b_32()
@@ -631,7 +619,7 @@ class SimMIM(pl.LightningModule):
         self.backbone = masked_autoencoder.MAEBackbone.from_vit(vit)
 
         # the decoder is a simple linear layer
-        self.decoder = nn.Linear(vit.hidden_dim, vit.patch_size**2 * 3)
+        self.decoder = nn.Linear(vit.hidden_dim, vit.patch_size ** 2 * 3)
 
         # L1 loss as paper suggestion
         self.criterion = nn.L1Loss()
@@ -691,7 +679,7 @@ class SimMIM(pl.LightningModule):
 
 
 class MSN(pl.LightningModule):
-    def __init(self):
+    def __init__(self):
         super().__init__()
 
         self.warmup_epochs = 15
@@ -736,8 +724,7 @@ class MSN(pl.LightningModule):
         loss = self.criterion(anchors_out, targets_out, self.prototypes.data)
         self.log("train_loss_ssl", loss)
         self.log(
-            "rep_std",
-            debug.std_of_l2_normalized(targets_out.flatten(1)),
+            "rep_std", debug.std_of_l2_normalized(targets_out.flatten(1)),
         )
         return loss
 
@@ -759,10 +746,7 @@ class MSN(pl.LightningModule):
             self.prototypes,
         ]
         optim = torch.optim.AdamW(
-            params=params,
-            lr=1.5e-4 * lr_factor,
-            weight_decay=0.05,
-            betas=(0.9, 0.95),
+            params=params, lr=1.5e-4 * lr_factor, weight_decay=0.05, betas=(0.9, 0.95),
         )
         cosine_scheduler = scheduler.CosineWarmupScheduler(
             optim, self.warmup_epochs, max_epochs
@@ -775,7 +759,7 @@ class MSN(pl.LightningModule):
 
 
 class PMSN(pl.LightningModule):
-    def __init(self):
+    def __init__(self):
         super().__init__()
 
         self.warmup_epochs = 15
@@ -820,8 +804,7 @@ class PMSN(pl.LightningModule):
         loss = self.criterion(anchors_out, targets_out, self.prototypes.data)
         self.log("train_loss_ssl", loss)
         self.log(
-            "rep_std",
-            debug.std_of_l2_normalized(targets_out.flatten(1)),
+            "rep_std", debug.std_of_l2_normalized(targets_out.flatten(1)),
         )
         return loss
 
@@ -843,10 +826,7 @@ class PMSN(pl.LightningModule):
             self.prototypes,
         ]
         optim = torch.optim.AdamW(
-            params=params,
-            lr=1.5e-4 * lr_factor,
-            weight_decay=0.05,
-            betas=(0.9, 0.95),
+            params=params, lr=1.5e-4 * lr_factor, weight_decay=0.05, betas=(0.9, 0.95),
         )
         cosine_scheduler = scheduler.CosineWarmupScheduler(
             optim, self.warmup_epochs, max_epochs
@@ -859,7 +839,7 @@ class PMSN(pl.LightningModule):
 
 
 class SwaV(pl.LightningModule):
-    def __init(self):
+    def __init__(self):
         super().__init__()
         # create a ResNet backbone and remove the classification head
         self.backbone = timm.create_model("resnet18", num_classes=0, pretrained=False)
@@ -901,9 +881,7 @@ class SwaV(pl.LightningModule):
 
     def configure_optimizers(self):
         optim = torch.optim.Adam(
-            self.parameters(),
-            lr=1e-3 * lr_factor,
-            weight_decay=1e-6,
+            self.parameters(), lr=1e-3 * lr_factor, weight_decay=1e-6,
         )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, max_epochs)
         return [optim], [scheduler]
@@ -914,7 +892,7 @@ class SwaV(pl.LightningModule):
 
 
 class DCLW(pl.LightningModule):
-    def __init(self):
+    def __init__(self):
         super().__init__()
         # create a ResNet backbone and remove the classification head
         self.backbone = timm.create_model("resnet18", num_classes=0, pretrained=False)
@@ -949,7 +927,7 @@ class DCLW(pl.LightningModule):
 
 
 class VICReg(pl.LightningModule):
-    def __init(self):
+    def __init__(self):
         super().__init__()
         # create a ResNet backbone and remove the classification head
         self.backbone = timm.create_model("resnet18", num_classes=0, pretrained=False)
