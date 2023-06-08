@@ -9,12 +9,8 @@ from torchvision.transforms.functional import InterpolationMode
 from ssl_wafermap.transforms.augmentations import get_base_transforms
 from ssl_wafermap.transforms.utils import NORMALIZE_STATS
 
-# This can actually be used for MSN as well, just change n_local_views to 10 and optionally global_crop_scale
-# Maybe global_crop_scale should be increased to (0.7, 1.0) for DINO, (1.0, 1.0) for MSN since we already drop patches?
-
-# Seems weird to have a separate multicrop transform for SwAV and DINO, since they're all doing the same thing
-
-# Notation convention:
+# Unlike lightly, I've created a single transform for multi-crop augmentations
+# It seems odd to create separate ones for SwAV, DINO, MSN, etc. when they all follow the same logic
 
 
 class MultiCropViewTransform:

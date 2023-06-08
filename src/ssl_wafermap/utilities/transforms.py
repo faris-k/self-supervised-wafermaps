@@ -1,3 +1,5 @@
+# NOTE: Deprecated in favor of ssl_wafermap.transforms (much cleaner 😉)
+
 import random
 from typing import List, Tuple
 

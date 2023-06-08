@@ -1,14 +1,14 @@
 import random
-from typing import List, Tuple
+from typing import List
 
 import cv2
 import numpy as np
 import torch
 import torchvision.transforms as T
-from lightly.transforms.rotation import (
-    RandomRotate,  # FIXME: from lightly.transforms.rotation import random_rotation_transform
-)
+from lightly.transforms.rotation import RandomRotate
 from torchvision.transforms.functional import InterpolationMode
+
+from ssl_wafermap.transforms.utils import NORMALIZE_STATS
 
 
 class DieNoise:
@@ -54,7 +54,10 @@ class RandomOneOf:
     """
 
     def __init__(
-        self, transforms, weights: List[float] = None, p: float = 1.0,
+        self,
+        transforms,
+        weights: List[float] = None,
+        p: float = 1.0,
     ):
         if weights:
             if len(transforms) != len(weights):
@@ -147,7 +150,12 @@ class DPWTransform:
         self.p = p
 
     def power_law_transform(
-        x, domain_lower, domain_upper, out_lower=0.4, out_upper=0.95, p=5,
+        x,
+        domain_lower,
+        domain_upper,
+        out_lower=0.4,
+        out_upper=0.95,
+        p=5,
     ):
         # Handle edge cases
         if x <= domain_lower:
@@ -242,12 +250,6 @@ class DPWTransform:
         return new_img
 
 
-NORMALIZE_STATS = {
-    "mean": [0.4496, 0.4496, 0.4496],
-    "std": [0.2926, 0.2926, 0.2926],
-}
-
-
 def get_base_transforms(
     img_size: List[int] = [224, 224],
     die_noise_prob: float = 0.03,
@@ -287,7 +289,10 @@ def get_base_transforms(
     transforms = [
         # Randomly perform either DieNoise or DPWTransform with a 50% chance
         RandomOneOf(
-            [DieNoise(die_noise_prob), MedianFilter() if denoise else DPWTransform(),]
+            [
+                DieNoise(die_noise_prob),
+                MedianFilter() if denoise else DPWTransform(),
+            ]
         ),
         # Convert to PIL Image, then perform all torchvision transforms except cropping
         T.ToPILImage(),
@@ -301,21 +306,20 @@ def get_base_transforms(
 
     # If cropping, add a random crop transform with a 50% chance
     if crop:
-        transforms.append(
-            T.RandomApply(
-                torch.nn.ModuleList(
-                    [
-                        T.RandomResizedCrop(
-                            size=img_size,
-                            scale=(0.4, 1.0),
-                            ratio=(1.0, 1.0),
-                            interpolation=InterpolationMode.NEAREST,
-                        )
-                    ]
-                ),
-                p=0.5,
-            )
+        random_crop = T.RandomApply(
+            torch.nn.ModuleList(
+                [
+                    T.RandomResizedCrop(
+                        size=img_size,
+                        scale=(0.4, 1.0),
+                        ratio=(1.0, 1.0),
+                        interpolation=InterpolationMode.NEAREST,
+                    )
+                ]
+            ),
+            p=0.5,
         )
+        transforms.append(random_crop)
 
     # Optionally convert to tensor
     if to_tensor:
@@ -328,4 +332,29 @@ def get_base_transforms(
     if as_list:
         return transforms
     else:
-        T.Compose(transforms)
+        return T.Compose(transforms)
+
+
+def get_inference_transforms(img_size: List[int] = [224, 224], normalize: bool = True):
+    """Image transforms for inference.
+    Simply converts to PIL Image, resizes, and converts to tensor.
+
+    Parameters
+    ----------
+    img_size : List[int], optional
+        Size of image, by default [224, 224]
+    normalize : bool, optional
+        Whether to normalize the image, by default True
+    """
+    transforms = [
+        # Convert to PIL Image, then perform all torchvision transforms
+        T.ToPILImage(),
+        T.Resize(img_size, interpolation=InterpolationMode.NEAREST),
+        T.Grayscale(num_output_channels=3),
+        T.ToTensor(),
+    ]
+
+    if normalize:
+        transforms.append(T.Normalize(**NORMALIZE_STATS))
+
+    return T.Compose(transforms)
