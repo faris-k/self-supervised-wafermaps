@@ -54,8 +54,7 @@ class KNNBenchmarkModule(pl.LightningModule):
         # After training, we will compute a confusion matrix
         self.confusion_matrix = []
 
-        # Dummy param tracks the device the model is using
-        self.dummy_param = nn.Parameter(torch.empty(0))
+        # NOTE: dummy_param was deprecated and will cause issues with loading our old checkpoints
 
         # Create a feature bank history which contains the feature bank of each epoch
         self.feature_bank_history = []
@@ -71,9 +70,9 @@ class KNNBenchmarkModule(pl.LightningModule):
         self.feature_bank = []
         self.targets_bank = []
         for data in self.dataloader_kNN:
-            img, target, _ = data
-            img = img.to(self.dummy_param.device)
-            target = target.to(self.dummy_param.device)
+            img, target = data
+            img = img.to(self.device)
+            target = target.to(self.device)
             feature = self.backbone(img).squeeze()
             feature = F.normalize(feature, dim=1)
             self.feature_bank.append(feature)
@@ -86,7 +85,7 @@ class KNNBenchmarkModule(pl.LightningModule):
 
     # We'll need to manually store the outputs of the validation step to our lists
     def validation_step(self, batch, batch_idx):
-        images, targets, _ = batch
+        images, targets = batch
         feature = self.backbone(images).squeeze()
         feature = F.normalize(feature, dim=1)
         pred_labels = knn_predict(
@@ -134,7 +133,7 @@ class KNNBenchmarkModule(pl.LightningModule):
         self.all_targets.clear()
 
     def predict_step(self, batch, batch_idx):
-        images, _, _ = batch
+        images, _ = batch
         return self.backbone(images)
 
 
@@ -169,8 +168,7 @@ class WandBKNNBenchmarkModule(pl.LightningModule):
         # After training, we will compute a confusion matrix
         self.confusion_matrix = []
 
-        # Dummy param tracks the device the model is using
-        self.dummy_param = nn.Parameter(torch.empty(0))
+        # NOTE: dummy_param was deprecated and will cause issues with loading our old checkpoints
 
         # Create a feature bank history which contains the feature bank of each epoch
         self.feature_bank_history = []
@@ -186,9 +184,9 @@ class WandBKNNBenchmarkModule(pl.LightningModule):
         self.feature_bank = []
         self.targets_bank = []
         for data in self.dataloader_kNN:
-            img, target, _ = data
-            img = img.to(self.dummy_param.device)
-            target = target.to(self.dummy_param.device)
+            img, target = data
+            img = img.to(self.device)
+            target = target.to(self.device)
             feature = self.backbone(img).squeeze()
             feature = F.normalize(feature, dim=1)
             self.feature_bank.append(feature)
@@ -201,7 +199,7 @@ class WandBKNNBenchmarkModule(pl.LightningModule):
 
     # We'll need to manually store the outputs of the validation step to our lists
     def validation_step(self, batch, batch_idx):
-        images, targets, _ = batch
+        images, targets = batch
         feature = self.backbone(images).squeeze()
         feature = F.normalize(feature, dim=1)
         pred_labels = knn_predict(
@@ -306,7 +304,7 @@ class SupervisedR18(KNNBenchmarkModule):
         return F.log_softmax(p, dim=1)
 
     def training_step(self, batch, batch_idx):
-        x, y, _ = batch
+        x, y = batch
         logits = self.forward(x)
         loss = F.nll_loss(logits, y)
         self.log("train_loss", loss, prog_bar=True)
@@ -341,7 +339,7 @@ class MoCo(KNNBenchmarkModule):
         return self.projection_head(x)
 
     def training_step(self, batch, batch_idx):
-        (x0, x1), _, _ = batch
+        (x0, x1), _ = batch
 
         # update momentum
         utils.update_momentum(self.backbone, self.backbone_momentum, 0.99)
@@ -397,7 +395,7 @@ class SimCLR(KNNBenchmarkModule):
         return z
 
     def training_step(self, batch, batch_index):
-        (x0, x1), _, _ = batch
+        (x0, x1), _ = batch
         z0 = self.forward(x0)
         z1 = self.forward(x1)
         loss = self.criterion(z0, z1)
@@ -431,7 +429,7 @@ class SimSiam(KNNBenchmarkModule):
         return z, p
 
     def training_step(self, batch, batch_idx):
-        (x0, x1), _, _ = batch
+        (x0, x1), _ = batch
         z0, p0 = self.forward(x0)
         z1, p1 = self.forward(x1)
         loss = 0.5 * (self.criterion(z0, p1) + self.criterion(z1, p0))
@@ -455,7 +453,7 @@ class FastSiam(SimSiam):
 
     # Only the training_step is different
     def training_step(self, batch, batch_idx):
-        views, _, _ = batch
+        views, _ = batch
         features = [self.forward(view) for view in views]
         zs = torch.stack([z for z, _ in features])
         ps = torch.stack([p for _, p in features])
@@ -488,7 +486,7 @@ class BarlowTwins(KNNBenchmarkModule):
         return z
 
     def training_step(self, batch, batch_index):
-        (x0, x1), _, _ = batch
+        (x0, x1), _ = batch
         z0 = self.forward(x0)
         z1 = self.forward(x1)
         loss = self.criterion(z0, z1)
@@ -543,7 +541,7 @@ class BYOL(KNNBenchmarkModule):
         utils.update_momentum(
             self.projection_head, self.projection_head_momentum, m=0.99
         )
-        (x0, x1), _, _ = batch
+        (x0, x1), _ = batch
         p0 = self.forward(x0)
         z0 = self.forward_momentum(x0)
         p1 = self.forward(x1)
@@ -601,7 +599,7 @@ class DINO(KNNBenchmarkModule):
     def training_step(self, batch, batch_idx):
         utils.update_momentum(self.backbone, self.teacher_backbone, m=0.99)
         utils.update_momentum(self.head, self.teacher_head, m=0.99)
-        views, _, _ = batch
+        views, _ = batch
         views = [view.to(self.device) for view in views]
         global_views = views[:2]
         teacher_out = [self.forward_teacher(view) for view in global_views]
@@ -658,7 +656,7 @@ class DINOViT(KNNBenchmarkModule):
     def training_step(self, batch, batch_idx):
         utils.update_momentum(self.backbone, self.teacher_backbone, m=0.99)
         utils.update_momentum(self.head, self.teacher_head, m=0.99)
-        views, _, _ = batch
+        views, _ = batch
         views = [view.to(self.device) for view in views]
         global_views = views[:2]
         teacher_out = [self.forward_teacher(view) for view in global_views]
@@ -731,7 +729,8 @@ class MAE(KNNBenchmarkModule):
         return x_pred
 
     def training_step(self, batch, batch_idx):
-        images, _, _ = batch
+        images, _ = batch
+        images = images[0]
 
         batch_size = images.shape[0]
         idx_keep, idx_mask = utils.random_token_mask(
@@ -764,86 +763,9 @@ class MAE(KNNBenchmarkModule):
         return [optim], [cosine_scheduler]
 
 
-class MAE2(KNNBenchmarkModule):
+class MAE2(MAE):
     def __init__(self, dataloader_kNN=None, num_classes=9, **kwargs):
         super().__init__(dataloader_kNN, num_classes, **kwargs)
-
-        decoder_dim = 512
-        vit = torchvision.models.vit_b_32()
-
-        self.warmup_epochs = 40 if max_epochs >= 800 else 20
-        self.mask_ratio = 0.75
-        self.patch_size = vit.patch_size
-        self.sequence_length = vit.seq_length
-        self.mask_token = nn.Parameter(torch.zeros(1, 1, decoder_dim))
-        self.backbone = masked_autoencoder.MAEBackbone.from_vit(vit)
-        self.decoder = masked_autoencoder.MAEDecoder(
-            seq_length=vit.seq_length,
-            num_layers=1,
-            num_heads=16,
-            embed_input_dim=vit.hidden_dim,
-            hidden_dim=decoder_dim,
-            mlp_dim=decoder_dim * 4,
-            out_dim=vit.patch_size**2 * 3,
-            dropout=0,
-            attention_dropout=0,
-        )
-        self.criterion = nn.MSELoss()
-
-    def forward_encoder(self, images, idx_keep=None):
-        out = self.backbone.encode(images, idx_keep)
-        self.log("rep_std", debug.std_of_l2_normalized(out.flatten(1)))
-        return out
-
-    def forward_decoder(self, x_encoded, idx_keep, idx_mask):
-        # build decoder input
-        batch_size = x_encoded.shape[0]
-        x_decode = self.decoder.embed(x_encoded)
-        x_masked = utils.repeat_token(
-            self.mask_token, (batch_size, self.sequence_length)
-        )
-        x_masked = utils.set_at_index(x_masked, idx_keep, x_decode.type_as(x_masked))
-
-        # decoder forward pass
-        x_decoded = self.decoder.decode(x_masked)
-
-        # predict pixel values for masked tokens
-        x_pred = utils.get_at_index(x_decoded, idx_mask)
-        x_pred = self.decoder.predict(x_pred)
-        return x_pred
-
-    def training_step(self, batch, batch_idx):
-        images, _, _ = batch
-
-        batch_size = images.shape[0]
-        idx_keep, idx_mask = utils.random_token_mask(
-            size=(batch_size, self.sequence_length),
-            mask_ratio=self.mask_ratio,
-            device=images.device,
-        )
-        x_encoded = self.forward_encoder(images, idx_keep)
-        x_pred = self.forward_decoder(x_encoded, idx_keep, idx_mask)
-
-        # get image patches for masked tokens
-        patches = utils.patchify(images, self.patch_size)
-        # must adjust idx_mask for missing class token
-        target = utils.get_at_index(patches, idx_mask - 1)
-
-        loss = self.criterion(x_pred, target)
-        self.log("train_loss_ssl", loss)
-        return loss
-
-    def configure_optimizers(self):
-        optim = torch.optim.AdamW(
-            self.parameters(),
-            lr=1.5e-4 * lr_factor,
-            weight_decay=0.05,
-            betas=(0.9, 0.95),
-        )
-        cosine_scheduler = scheduler.CosineWarmupScheduler(
-            optim, self.warmup_epochs, max_epochs
-        )
-        return [optim], [cosine_scheduler]
 
 
 class SimMIM(KNNBenchmarkModule):
@@ -878,7 +800,8 @@ class SimMIM(KNNBenchmarkModule):
         return self.decoder(x_encoded)
 
     def training_step(self, batch, batch_idx):
-        images, _, _ = batch
+        images, _ = batch
+        images = images[0]
 
         batch_size = images.shape[0]
         idx_keep, idx_mask = utils.random_token_mask(
@@ -948,7 +871,7 @@ class MSN(KNNBenchmarkModule):
         utils.update_momentum(self.anchor_backbone, self.backbone, 0.996)
         utils.update_momentum(self.anchor_projection_head, self.projection_head, 0.996)
 
-        views, _, _ = batch
+        views, _ = batch
         views = [view.to(self.device, non_blocking=True) for view in views]
         targets = views[0]
         anchors = views[1]
@@ -1028,7 +951,7 @@ class PMSN(KNNBenchmarkModule):
         utils.update_momentum(self.anchor_backbone, self.backbone, 0.996)
         utils.update_momentum(self.anchor_projection_head, self.projection_head, 0.996)
 
-        views, _, _ = batch
+        views, _ = batch
         views = [view.to(self.device, non_blocking=True) for view in views]
         targets = views[0]
         anchors = views[1]
@@ -1105,7 +1028,7 @@ class SwaV(KNNBenchmarkModule):
         # the multi-crop dataloader returns a list of image crops where the
         # first two items are the high resolution crops and the rest are low
         # resolution crops
-        multi_crops, _, _ = batch
+        multi_crops, _ = batch
         multi_crop_features = [self.forward(x) for x in multi_crops]
 
         # split list of crop features into high and low resolution
@@ -1144,7 +1067,7 @@ class DCLW(KNNBenchmarkModule):
         return z
 
     def training_step(self, batch, batch_index):
-        (x0, x1), _, _ = batch
+        (x0, x1), _ = batch
         z0 = self.forward(x0)
         z1 = self.forward(x1)
         loss = self.criterion(z0, z1)
@@ -1176,7 +1099,7 @@ class VICReg(KNNBenchmarkModule):
         return z
 
     def training_step(self, batch, batch_index):
-        (x0, x1), _, _ = batch
+        (x0, x1), _ = batch
         z0 = self.forward(x0)
         z1 = self.forward(x1)
         loss = self.criterion(z0, z1)
