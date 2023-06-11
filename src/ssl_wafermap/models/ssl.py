@@ -21,6 +21,8 @@ gather_distributed = False
 lr_factor = 64 / 256
 max_epochs = 150
 
+# FIXME: All of the following are deprecated and will not work with the new transforms
+
 
 class SupervisedR18(pl.LightningModule):
     def __init__(self):
@@ -46,7 +48,7 @@ class SupervisedR18(pl.LightningModule):
         return optim
 
     def predict_step(self, batch, batch_idx):
-        images, _, _ = batch
+        images, _ = batch
         return self.backbone(images)
 
 
@@ -74,7 +76,7 @@ class MoCo(pl.LightningModule):
         return self.projection_head(x)
 
     def training_step(self, batch, batch_idx):
-        (x0, x1), _, _ = batch
+        (x0, x1), _ = batch
 
         # update momentum
         utils.update_momentum(self.backbone, self.backbone_momentum, 0.99)
@@ -105,13 +107,16 @@ class MoCo(pl.LightningModule):
             self.projection_head.parameters()
         )
         optim = torch.optim.SGD(
-            params, lr=6e-2 * lr_factor, momentum=0.9, weight_decay=5e-4,
+            params,
+            lr=6e-2 * lr_factor,
+            momentum=0.9,
+            weight_decay=5e-4,
         )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, max_epochs)
         return [optim], [scheduler]
 
     def predict_step(self, batch, batch_idx):
-        images, _, _ = batch
+        images, _ = batch
         return self.backbone(images)
 
 
@@ -131,7 +136,7 @@ class SimCLR(pl.LightningModule):
         return z
 
     def training_step(self, batch, batch_index):
-        (x0, x1), _, _ = batch
+        (x0, x1), _ = batch
         z0 = self.forward(x0)
         z1 = self.forward(x1)
         loss = self.criterion(z0, z1)
@@ -146,7 +151,7 @@ class SimCLR(pl.LightningModule):
         return [optim], [scheduler]
 
     def predict_step(self, batch, batch_idx):
-        images, _, _ = batch
+        images, _ = batch
         return self.backbone(images)
 
 
@@ -169,7 +174,7 @@ class SimSiam(pl.LightningModule):
         return z, p
 
     def training_step(self, batch, batch_idx):
-        (x0, x1), _, _ = batch
+        (x0, x1), _ = batch
         z0, p0 = self.forward(x0)
         z1, p1 = self.forward(x1)
         loss = 0.5 * (self.criterion(z0, p1) + self.criterion(z1, p0))
@@ -187,7 +192,7 @@ class SimSiam(pl.LightningModule):
         return [optim], [scheduler]
 
     def predict_step(self, batch, batch_idx):
-        images, _, _ = batch
+        images, _ = batch
         return self.backbone(images)
 
 
@@ -197,7 +202,7 @@ class FastSiam(SimSiam):
 
     # Only the training_step is different
     def training_step(self, batch, batch_idx):
-        views, _, _ = batch
+        views, _ = batch
         features = [self.forward(view) for view in views]
         zs = torch.stack([z for z, _ in features])
         ps = torch.stack([p for _, p in features])
@@ -230,7 +235,7 @@ class BarlowTwins(pl.LightningModule):
         return z
 
     def training_step(self, batch, batch_index):
-        (x0, x1), _, _ = batch
+        (x0, x1), _ = batch
         z0 = self.forward(x0)
         z1 = self.forward(x1)
         loss = self.criterion(z0, z1)
@@ -248,7 +253,7 @@ class BarlowTwins(pl.LightningModule):
         return [optim], [cosine_scheduler]
 
     def predict_step(self, batch, batch_idx):
-        images, _, _ = batch
+        images, _ = batch
         return self.backbone(images)
 
 
@@ -289,7 +294,7 @@ class BYOL(pl.LightningModule):
         utils.update_momentum(
             self.projection_head, self.projection_head_momentum, m=0.99
         )
-        (x0, x1), _, _ = batch
+        (x0, x1), _ = batch
         p0 = self.forward(x0)
         z0 = self.forward_momentum(x0)
         p1 = self.forward(x1)
@@ -305,13 +310,16 @@ class BYOL(pl.LightningModule):
             + list(self.prediction_head.parameters())
         )
         optim = torch.optim.SGD(
-            params, lr=6e-2 * lr_factor, momentum=0.9, weight_decay=5e-4,
+            params,
+            lr=6e-2 * lr_factor,
+            momentum=0.9,
+            weight_decay=5e-4,
         )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, max_epochs)
         return [optim], [scheduler]
 
     def predict_step(self, batch, batch_idx):
-        images, _, _ = batch
+        images, _ = batch
         return self.backbone(images)
 
 
@@ -348,7 +356,7 @@ class DINO(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         utils.update_momentum(self.backbone, self.teacher_backbone, m=0.99)
         utils.update_momentum(self.head, self.teacher_head, m=0.99)
-        views, _, _ = batch
+        views, _ = batch
         views = [view.to(self.device) for view in views]
         global_views = views[:2]
         teacher_out = [self.forward_teacher(view) for view in global_views]
@@ -360,13 +368,16 @@ class DINO(pl.LightningModule):
     def configure_optimizers(self):
         param = list(self.backbone.parameters()) + list(self.head.parameters())
         optim = torch.optim.SGD(
-            param, lr=6e-2 * lr_factor, momentum=0.9, weight_decay=5e-4,
+            param,
+            lr=6e-2 * lr_factor,
+            momentum=0.9,
+            weight_decay=5e-4,
         )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, max_epochs)
         return [optim], [scheduler]
 
     def predict_step(self, batch, batch_idx):
-        images, _, _ = batch
+        images, _ = batch
         return self.backbone(images)
 
 
@@ -406,7 +417,7 @@ class DINOViT(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         utils.update_momentum(self.backbone, self.teacher_backbone, m=0.99)
         utils.update_momentum(self.head, self.teacher_head, m=0.99)
-        views, _, _ = batch
+        views, _ = batch
         views = [view.to(self.device) for view in views]
         global_views = views[:2]
         teacher_out = [self.forward_teacher(view) for view in global_views]
@@ -419,7 +430,10 @@ class DINOViT(pl.LightningModule):
     def configure_optimizers(self):
         param = list(self.backbone.parameters()) + list(self.head.parameters())
         optim = torch.optim.AdamW(
-            param, lr=1.5e-4 * lr_factor, weight_decay=0.05, betas=(0.9, 0.95),
+            param,
+            lr=1.5e-4 * lr_factor,
+            weight_decay=0.05,
+            betas=(0.9, 0.95),
         )
         cosine_scheduler = scheduler.CosineWarmupScheduler(
             optim, self.warmup_epochs, max_epochs
@@ -427,7 +441,7 @@ class DINOViT(pl.LightningModule):
         return [optim], [cosine_scheduler]
 
     def predict_step(self, batch, batch_idx):
-        images, _, _ = batch
+        images, _ = batch
         return self.backbone(images)
 
 
@@ -451,7 +465,7 @@ class MAE(pl.LightningModule):
             embed_input_dim=vit.hidden_dim,
             hidden_dim=decoder_dim,
             mlp_dim=decoder_dim * 4,
-            out_dim=vit.patch_size ** 2 * 3,
+            out_dim=vit.patch_size**2 * 3,
             dropout=0,
             attention_dropout=0,
         )
@@ -480,7 +494,8 @@ class MAE(pl.LightningModule):
         return x_pred
 
     def training_step(self, batch, batch_idx):
-        images, _, _ = batch
+        images, _ = batch
+        images = images[0]
 
         batch_size = images.shape[0]
         idx_keep, idx_mask = utils.random_token_mask(
@@ -513,94 +528,13 @@ class MAE(pl.LightningModule):
         return [optim], [cosine_scheduler]
 
     def predict_step(self, batch, batch_idx):
-        images, _, _ = batch
+        images, _ = batch
         return self.backbone(images)
 
 
-class MAE2(pl.LightningModule):
+class MAE2(MAE):
     def __init__(self):
         super().__init__()
-
-        decoder_dim = 512
-        vit = torchvision.models.vit_b_32()
-
-        self.warmup_epochs = 40 if max_epochs >= 800 else 20
-        self.mask_ratio = 0.75
-        self.patch_size = vit.patch_size
-        self.sequence_length = vit.seq_length
-        self.mask_token = nn.Parameter(torch.zeros(1, 1, decoder_dim))
-        self.backbone = masked_autoencoder.MAEBackbone.from_vit(vit)
-        self.decoder = masked_autoencoder.MAEDecoder(
-            seq_length=vit.seq_length,
-            num_layers=1,
-            num_heads=16,
-            embed_input_dim=vit.hidden_dim,
-            hidden_dim=decoder_dim,
-            mlp_dim=decoder_dim * 4,
-            out_dim=vit.patch_size ** 2 * 3,
-            dropout=0,
-            attention_dropout=0,
-        )
-        self.criterion = nn.MSELoss()
-
-    def forward_encoder(self, images, idx_keep=None):
-        out = self.backbone.encode(images, idx_keep)
-        self.log("rep_std", debug.std_of_l2_normalized(out.flatten(1)))
-        return out
-
-    def forward_decoder(self, x_encoded, idx_keep, idx_mask):
-        # build decoder input
-        batch_size = x_encoded.shape[0]
-        x_decode = self.decoder.embed(x_encoded)
-        x_masked = utils.repeat_token(
-            self.mask_token, (batch_size, self.sequence_length)
-        )
-        x_masked = utils.set_at_index(x_masked, idx_keep, x_decode.type_as(x_masked))
-
-        # decoder forward pass
-        x_decoded = self.decoder.decode(x_masked)
-
-        # predict pixel values for masked tokens
-        x_pred = utils.get_at_index(x_decoded, idx_mask)
-        x_pred = self.decoder.predict(x_pred)
-        return x_pred
-
-    def training_step(self, batch, batch_idx):
-        images, _, _ = batch
-
-        batch_size = images.shape[0]
-        idx_keep, idx_mask = utils.random_token_mask(
-            size=(batch_size, self.sequence_length),
-            mask_ratio=self.mask_ratio,
-            device=images.device,
-        )
-        x_encoded = self.forward_encoder(images, idx_keep)
-        x_pred = self.forward_decoder(x_encoded, idx_keep, idx_mask)
-
-        # get image patches for masked tokens
-        patches = utils.patchify(images, self.patch_size)
-        # must adjust idx_mask for missing class token
-        target = utils.get_at_index(patches, idx_mask - 1)
-
-        loss = self.criterion(x_pred, target)
-        self.log("train_loss_ssl", loss)
-        return loss
-
-    def configure_optimizers(self):
-        optim = torch.optim.AdamW(
-            self.parameters(),
-            lr=1.5e-4 * lr_factor,
-            weight_decay=0.05,
-            betas=(0.9, 0.95),
-        )
-        cosine_scheduler = scheduler.CosineWarmupScheduler(
-            optim, self.warmup_epochs, max_epochs
-        )
-        return [optim], [cosine_scheduler]
-
-    def predict_step(self, batch, batch_idx):
-        images, _, _ = batch
-        return self.backbone(images)
 
 
 class SimMIM(pl.LightningModule):
@@ -619,7 +553,7 @@ class SimMIM(pl.LightningModule):
         self.backbone = masked_autoencoder.MAEBackbone.from_vit(vit)
 
         # the decoder is a simple linear layer
-        self.decoder = nn.Linear(vit.hidden_dim, vit.patch_size ** 2 * 3)
+        self.decoder = nn.Linear(vit.hidden_dim, vit.patch_size**2 * 3)
 
         # L1 loss as paper suggestion
         self.criterion = nn.L1Loss()
@@ -635,7 +569,8 @@ class SimMIM(pl.LightningModule):
         return self.decoder(x_encoded)
 
     def training_step(self, batch, batch_idx):
-        images, _, _ = batch
+        images, _ = batch
+        images = images[0]
 
         batch_size = images.shape[0]
         idx_keep, idx_mask = utils.random_token_mask(
@@ -674,7 +609,7 @@ class SimMIM(pl.LightningModule):
         return [optim], [cosine_scheduler]
 
     def predict_step(self, batch, batch_idx):
-        images, _, _ = batch
+        images, _ = batch
         return self.backbone(images)
 
 
@@ -709,7 +644,7 @@ class MSN(pl.LightningModule):
         utils.update_momentum(self.anchor_backbone, self.backbone, 0.996)
         utils.update_momentum(self.anchor_projection_head, self.projection_head, 0.996)
 
-        views, _, _ = batch
+        views, _ = batch
         views = [view.to(self.device, non_blocking=True) for view in views]
         targets = views[0]
         anchors = views[1]
@@ -724,7 +659,8 @@ class MSN(pl.LightningModule):
         loss = self.criterion(anchors_out, targets_out, self.prototypes.data)
         self.log("train_loss_ssl", loss)
         self.log(
-            "rep_std", debug.std_of_l2_normalized(targets_out.flatten(1)),
+            "rep_std",
+            debug.std_of_l2_normalized(targets_out.flatten(1)),
         )
         return loss
 
@@ -746,7 +682,10 @@ class MSN(pl.LightningModule):
             self.prototypes,
         ]
         optim = torch.optim.AdamW(
-            params=params, lr=1.5e-4 * lr_factor, weight_decay=0.05, betas=(0.9, 0.95),
+            params=params,
+            lr=1.5e-4 * lr_factor,
+            weight_decay=0.05,
+            betas=(0.9, 0.95),
         )
         cosine_scheduler = scheduler.CosineWarmupScheduler(
             optim, self.warmup_epochs, max_epochs
@@ -754,7 +693,7 @@ class MSN(pl.LightningModule):
         return [optim], [cosine_scheduler]
 
     def predict_step(self, batch, batch_idx):
-        images, _, _ = batch
+        images, _ = batch
         return self.backbone(images)
 
 
@@ -789,7 +728,7 @@ class PMSN(pl.LightningModule):
         utils.update_momentum(self.anchor_backbone, self.backbone, 0.996)
         utils.update_momentum(self.anchor_projection_head, self.projection_head, 0.996)
 
-        views, _, _ = batch
+        views, _ = batch
         views = [view.to(self.device, non_blocking=True) for view in views]
         targets = views[0]
         anchors = views[1]
@@ -804,7 +743,8 @@ class PMSN(pl.LightningModule):
         loss = self.criterion(anchors_out, targets_out, self.prototypes.data)
         self.log("train_loss_ssl", loss)
         self.log(
-            "rep_std", debug.std_of_l2_normalized(targets_out.flatten(1)),
+            "rep_std",
+            debug.std_of_l2_normalized(targets_out.flatten(1)),
         )
         return loss
 
@@ -826,7 +766,10 @@ class PMSN(pl.LightningModule):
             self.prototypes,
         ]
         optim = torch.optim.AdamW(
-            params=params, lr=1.5e-4 * lr_factor, weight_decay=0.05, betas=(0.9, 0.95),
+            params=params,
+            lr=1.5e-4 * lr_factor,
+            weight_decay=0.05,
+            betas=(0.9, 0.95),
         )
         cosine_scheduler = scheduler.CosineWarmupScheduler(
             optim, self.warmup_epochs, max_epochs
@@ -834,7 +777,7 @@ class PMSN(pl.LightningModule):
         return [optim], [cosine_scheduler]
 
     def predict_step(self, batch, batch_idx):
-        images, _, _ = batch
+        images, _ = batch
         return self.backbone(images)
 
 
@@ -866,7 +809,7 @@ class SwaV(pl.LightningModule):
         # the multi-crop dataloader returns a list of image crops where the
         # first two items are the high resolution crops and the rest are low
         # resolution crops
-        multi_crops, _, _ = batch
+        multi_crops, _ = batch
         multi_crop_features = [self.forward(x) for x in multi_crops]
 
         # split list of crop features into high and low resolution
@@ -881,13 +824,15 @@ class SwaV(pl.LightningModule):
 
     def configure_optimizers(self):
         optim = torch.optim.Adam(
-            self.parameters(), lr=1e-3 * lr_factor, weight_decay=1e-6,
+            self.parameters(),
+            lr=1e-3 * lr_factor,
+            weight_decay=1e-6,
         )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, max_epochs)
         return [optim], [scheduler]
 
     def predict_step(self, batch, batch_idx):
-        images, _, _ = batch
+        images, _ = batch
         return self.backbone(images)
 
 
@@ -907,7 +852,7 @@ class DCLW(pl.LightningModule):
         return z
 
     def training_step(self, batch, batch_index):
-        (x0, x1), _, _ = batch
+        (x0, x1), _ = batch
         z0 = self.forward(x0)
         z1 = self.forward(x1)
         loss = self.criterion(z0, z1)
@@ -922,7 +867,7 @@ class DCLW(pl.LightningModule):
         return [optim], [scheduler]
 
     def predict_step(self, batch, batch_idx):
-        images, _, _ = batch
+        images, _ = batch
         return self.backbone(images)
 
 
@@ -943,7 +888,7 @@ class VICReg(pl.LightningModule):
         return z
 
     def training_step(self, batch, batch_index):
-        (x0, x1), _, _ = batch
+        (x0, x1), _ = batch
         z0 = self.forward(x0)
         z1 = self.forward(x1)
         loss = self.criterion(z0, z1)
@@ -960,5 +905,5 @@ class VICReg(pl.LightningModule):
         return [optim], [cosine_scheduler]
 
     def predict_step(self, batch, batch_idx):
-        images, _, _ = batch
+        images, _ = batch
         return self.backbone(images)
