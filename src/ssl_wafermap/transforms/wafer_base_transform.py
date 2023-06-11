@@ -5,8 +5,8 @@ from lightly.transforms.multi_view_transform import MultiViewTransform
 from ssl_wafermap.transforms.augmentations import get_base_transforms
 
 
-class BaseTransform(MultiViewTransform):
-    """Base transform for wafermap images.
+class BaseViewTransform(MultiViewTransform):
+    """Base multi-view transform for wafermap images.
 
     Parameters
     ----------
@@ -42,6 +42,7 @@ class BaseTransform(MultiViewTransform):
         normalize: bool = True,
         n_views: int = 2,
     ):
+        assert n_views > 0, "n_views must be greater than 0"
         view_transform = get_base_transforms(
             img_size=img_size,
             die_noise_prob=die_noise_prob,

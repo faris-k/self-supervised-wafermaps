@@ -1,3 +1,5 @@
+# Deprecated: new import lives in ssl_wafermap.data
+
 import torch
 from torch.utils.data import Dataset
 
@@ -35,6 +37,16 @@ class WaferMapDataset(Dataset):
 
 
 class TensorDataset(Dataset):
+    """Simple dataset for tensors.
+
+    Parameters
+    ----------
+    X : np.ndarray
+        Array of features
+    y : np.ndarray
+        Array of labels
+    """
+
     def __init__(self, X, y):
         self.X = torch.tensor(X).type(torch.float32)
         self.y = torch.tensor(y).type(torch.LongTensor)

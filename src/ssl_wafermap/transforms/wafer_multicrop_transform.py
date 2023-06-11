@@ -136,6 +136,9 @@ class MultiCropTransform(MultiViewTransform):
         rr_prob: float = 0.5,
         normalize: bool = True,
     ):
+        assert n_global_views > 0, "n_global_views must be greater than 0"
+        assert n_local_views > 0, "n_local_views must be greater than 0"
+
         # Create global and local transforms
         global_transform = MultiCropViewTransform(
             img_size=img_size,

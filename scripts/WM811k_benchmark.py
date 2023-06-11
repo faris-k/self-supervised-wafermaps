@@ -13,7 +13,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
-from lightly.data import LightlyDataset
 from lightly.models import utils
 from lightly.models.modules import heads, masked_autoencoder
 from lightly.utils import debug, scheduler
@@ -22,16 +21,11 @@ from sklearn.model_selection import train_test_split
 from timm.optim.lars import Lars
 from torch.utils.data import DataLoader
 
+from ssl_wafermap.data import WaferMapDataset
 from ssl_wafermap.models.knn import KNNBenchmarkModule
-from ssl_wafermap.utilities.data import WaferMapDataset
-from ssl_wafermap.utilities.transforms import (
-    WaferDINOCOllateFunction,
-    WaferFastSiamCollateFunction,
-    WaferImageCollateFunction,
-    WaferMAECollateFunction,
-    WaferMAECollateFunction2,
-    WaferMSNCollateFunction,
-    WaferSwaVCollateFunction,
+from ssl_wafermap.transforms import (
+    BaseViewTransform,
+    MultiCropTransform,
     get_base_transforms,
     get_inference_transforms,
 )
@@ -50,12 +44,11 @@ logs_root_dir = "../models/benchmark_logs"
 num_workers = 2  # os.cpu_count()
 memory_bank_size = 4096
 
-subset = False  # Whether to benchmark using a subset of the dataset
-max_epochs = 5 if subset else 150
+dummy = True  # Whether to perform a test run using a subset of the dataset
+max_epochs = 2 if dummy else 150
 knn_k = 5  # sweep of knn_k values leads to best performance at k=5
 knn_t = 0.1
 classes = 9
-input_size = 224
 
 #  Set to True to enable Distributed Data Parallel training.
 distributed = False
@@ -91,7 +84,7 @@ else:
     # limit to single gpu if not using distributed training
     devices = min(devices, 1)
 
-if subset:
+if dummy:
     # Create a smaller dataset for benchmarking using one of the training splits
     df = pd.read_pickle("../data/processed/WM811K/train_20_split.pkl.xz")
     X_train, X_val, y_train, y_val = train_test_split(
@@ -110,68 +103,69 @@ else:
     X_val, y_val = df_val.waferMap, df_val.failureCode
     del df_train, df_val
 
-# SSL training will have no transforms passed to the dataset object; this is handled by collate function
-dataset_train_ssl = LightlyDataset.from_torch_dataset(WaferMapDataset(X_train, y_train))
 
 # Use inference transforms to get kNN feature bank (dataset_train_kNN) and then evaluate (dataset_test)
-dataset_train_kNN = LightlyDataset.from_torch_dataset(
-    WaferMapDataset(X_train, y_train), transform=get_inference_transforms()
-)
-dataset_test = LightlyDataset.from_torch_dataset(
-    WaferMapDataset(X_val, y_val), transform=get_inference_transforms()
-)
+dataset_train_kNN = WaferMapDataset(X_train, y_train, get_inference_transforms())
+dataset_test = WaferMapDataset(X_val, y_val, get_inference_transforms())
 
-# For supervised baseline, pass base transforms since no collate function will be used
-dataset_train_supervised = LightlyDataset.from_torch_dataset(
-    WaferMapDataset(X_train, y_train),
-    transform=get_base_transforms(img_size=[input_size, input_size]),
-)
+# Base transform for basic joint embedding frameworks
+# FastSiam and MAE use a variant of this with different n_views
+base_transform = BaseViewTransform()
+fastsiam_transform = BaseViewTransform(n_views=4)
+mae_transform = BaseViewTransform(n_views=1)
 
-# Base collate function for basic joint embedding frameworks
-# e.g. SimCLR, MoCo, BYOL, Barlow Twins, DCLW, SimSiam
-collate_fn = WaferImageCollateFunction(
-    img_size=[input_size, input_size],
-    normalize=True,
-)
-
-# DINO, FastSiam, MSN, MAE, SwaV all need their own collate functions
-dino_collate_fn = WaferDINOCOllateFunction()
-fastsiam_collate_fn = WaferFastSiamCollateFunction([input_size, input_size])
-msn_collate_fn = WaferMSNCollateFunction()
-mae_collate_fn = WaferMAECollateFunction()
-mae2_collate_fn = WaferMAECollateFunction2()
-swav_collate_fn = WaferSwaVCollateFunction()
+# DINO, SwAV, MSN, and PMSN use multi-crop transforms
+multicrop_transform = MultiCropTransform()
 
 
-def get_data_loaders(batch_size: int, model):
+def create_dataset_train_ssl(model):
+    """Helper method to create the SSL training dataset for a given model
+
+    Parameters
+    ----------
+    model : pl.LightningModule
+        The model for which to select the correct transform
+
+    Returns
+    -------
+    WaferMapDataset
+        The SSL training dataset for the given model
+    """
+
+    model_to_transform = {
+        BarlowTwins: base_transform,
+        BYOL: base_transform,
+        DCLW: base_transform,
+        DINO: multicrop_transform,
+        DINOViT: multicrop_transform,
+        FastSiam: fastsiam_transform,
+        MAE: mae_transform,
+        MoCo: base_transform,
+        MSN: multicrop_transform,
+        PMSN: multicrop_transform,
+        SimCLR: base_transform,
+        SimMIM: mae_transform,
+        SimSiam: base_transform,
+        SwaV: multicrop_transform,
+        VICReg: base_transform,
+        # Supervised model will not use a multi-view transform; just use the single transform composition
+        SupervisedR18: get_base_transforms(),
+    }
+    transform = model_to_transform[model]
+    return WaferMapDataset(X_train, y_train, transform=transform)
+
+
+def get_data_loaders(batch_size: int, dataset_train_ssl):
     """Helper method to create dataloaders for SSL, kNN train and kNN test
 
     Args:
         batch_size: Desired batch size for all dataloaders
     """
-    # By default, use the base collate function
-    col_fn = collate_fn
-    # if the model is any of the DINO models, we use the DINO collate function
-    if model == DINO or model == DINOViT:
-        col_fn = dino_collate_fn
-    elif model == MSN or model == PMSN:
-        col_fn = msn_collate_fn
-    elif model == FastSiam:
-        col_fn = fastsiam_collate_fn
-    elif model == MAE or model == SimMIM:
-        col_fn = mae_collate_fn
-    elif model == MAE2:
-        col_fn = mae2_collate_fn
-    elif model == SwaV:
-        col_fn = swav_collate_fn
-    elif model == SupervisedR18:
-        col_fn = None
 
     dataloader_train_ssl = DataLoader(
-        dataset_train_ssl if model != SupervisedR18 else dataset_train_supervised,
+        dataset_train_ssl,
         batch_size=batch_size,
         shuffle=True,
-        collate_fn=col_fn,
         drop_last=True,
         num_workers=num_workers,
         pin_memory=True,
@@ -202,6 +196,9 @@ def get_data_loaders(batch_size: int, model):
 
 
 # All benchmarking models are defined here
+
+
+# Supervised Learning
 class SupervisedR18(KNNBenchmarkModule):
     def __init__(self, dataloader_kNN=None, num_classes=9, **kwargs):
         super().__init__(dataloader_kNN, num_classes, **kwargs)
@@ -215,7 +212,7 @@ class SupervisedR18(KNNBenchmarkModule):
         return F.log_softmax(p, dim=1)
 
     def training_step(self, batch, batch_idx):
-        x, y, _ = batch
+        x, y = batch
         logits = self.forward(x)
         loss = F.nll_loss(logits, y)
         self.log("train_loss", loss, prog_bar=True)
@@ -224,6 +221,69 @@ class SupervisedR18(KNNBenchmarkModule):
     def configure_optimizers(self):
         optim = torch.optim.AdamW(self.parameters())
         return optim
+
+
+# Contrastive Learning
+class SimCLR(KNNBenchmarkModule):
+    def __init__(self, dataloader_kNN=None, num_classes=9, **kwargs):
+        super().__init__(dataloader_kNN, num_classes, **kwargs)
+        # create a ResNet backbone and remove the classification head
+        self.backbone = timm.create_model("resnet18", num_classes=0, pretrained=False)
+        feature_dim = self.backbone.num_features
+        self.projection_head = heads.SimCLRProjectionHead(feature_dim, feature_dim, 128)
+        self.criterion = lightly.loss.NTXentLoss()
+
+    def forward(self, x):
+        x = self.backbone(x).flatten(start_dim=1)
+        z = self.projection_head(x)
+        self.log("rep_std", debug.std_of_l2_normalized(x))
+        return z
+
+    def training_step(self, batch, batch_index):
+        (x0, x1), _ = batch
+        z0 = self.forward(x0)
+        z1 = self.forward(x1)
+        loss = self.criterion(z0, z1)
+        self.log("train_loss_ssl", loss)
+        return loss
+
+    def configure_optimizers(self):
+        optim = torch.optim.SGD(
+            self.parameters(), lr=6e-2 * lr_factor, momentum=0.9, weight_decay=5e-4
+        )
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, max_epochs)
+        return [optim], [scheduler]
+
+
+class DCLW(KNNBenchmarkModule):
+    def __init__(self, dataloader_kNN=None, num_classes=9, **kwargs):
+        super().__init__(dataloader_kNN, num_classes, **kwargs)
+        # create a ResNet backbone and remove the classification head
+        self.backbone = timm.create_model("resnet18", num_classes=0, pretrained=False)
+        feature_dim = self.backbone.num_features
+        self.projection_head = heads.SimCLRProjectionHead(feature_dim, feature_dim, 128)
+        self.criterion = lightly.loss.DCLWLoss()
+
+    def forward(self, x):
+        x = self.backbone(x).flatten(start_dim=1)
+        z = self.projection_head(x)
+        self.log("rep_std", debug.std_of_l2_normalized(x))
+        return z
+
+    def training_step(self, batch, batch_index):
+        (x0, x1), _ = batch
+        z0 = self.forward(x0)
+        z1 = self.forward(x1)
+        loss = self.criterion(z0, z1)
+        self.log("train_loss_ssl", loss)
+        return loss
+
+    def configure_optimizers(self):
+        optim = torch.optim.SGD(
+            self.parameters(), lr=6e-2 * lr_factor, momentum=0.9, weight_decay=5e-4
+        )
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, max_epochs)
+        return [optim], [scheduler]
 
 
 class MoCo(KNNBenchmarkModule):
@@ -251,7 +311,7 @@ class MoCo(KNNBenchmarkModule):
         return self.projection_head(x)
 
     def training_step(self, batch, batch_idx):
-        (x0, x1), _, _ = batch
+        (x0, x1), _ = batch
 
         # update momentum
         utils.update_momentum(self.backbone, self.backbone_momentum, 0.99)
@@ -291,92 +351,7 @@ class MoCo(KNNBenchmarkModule):
         return [optim], [scheduler]
 
 
-class SimCLR(KNNBenchmarkModule):
-    def __init__(self, dataloader_kNN=None, num_classes=9, **kwargs):
-        super().__init__(dataloader_kNN, num_classes, **kwargs)
-        # create a ResNet backbone and remove the classification head
-        self.backbone = timm.create_model("resnet18", num_classes=0, pretrained=False)
-        feature_dim = self.backbone.num_features
-        self.projection_head = heads.SimCLRProjectionHead(feature_dim, feature_dim, 128)
-        self.criterion = lightly.loss.NTXentLoss()
-
-    def forward(self, x):
-        x = self.backbone(x).flatten(start_dim=1)
-        z = self.projection_head(x)
-        self.log("rep_std", debug.std_of_l2_normalized(x))
-        return z
-
-    def training_step(self, batch, batch_index):
-        (x0, x1), _, _ = batch
-        z0 = self.forward(x0)
-        z1 = self.forward(x1)
-        loss = self.criterion(z0, z1)
-        self.log("train_loss_ssl", loss)
-        return loss
-
-    def configure_optimizers(self):
-        optim = torch.optim.SGD(
-            self.parameters(), lr=6e-2 * lr_factor, momentum=0.9, weight_decay=5e-4
-        )
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, max_epochs)
-        return [optim], [scheduler]
-
-
-class SimSiam(KNNBenchmarkModule):
-    def __init__(self, dataloader_kNN=None, num_classes=9, **kwargs):
-        super().__init__(dataloader_kNN, num_classes, **kwargs)
-        # create a ResNet backbone and remove the classification head
-        self.backbone = timm.create_model("resnet18", num_classes=0, pretrained=False)
-        feature_dim = self.backbone.num_features
-        self.projection_head = heads.SimSiamProjectionHead(feature_dim, 2048, 2048)
-        self.prediction_head = heads.SimSiamPredictionHead(2048, 512, 2048)
-        self.criterion = lightly.loss.NegativeCosineSimilarity()
-
-    def forward(self, x):
-        f = self.backbone(x).flatten(start_dim=1)
-        z = self.projection_head(f)
-        p = self.prediction_head(z)
-        z = z.detach()
-        self.log("rep_std", debug.std_of_l2_normalized(f))
-        return z, p
-
-    def training_step(self, batch, batch_idx):
-        (x0, x1), _, _ = batch
-        z0, p0 = self.forward(x0)
-        z1, p1 = self.forward(x1)
-        loss = 0.5 * (self.criterion(z0, p1) + self.criterion(z1, p0))
-        self.log("train_loss_ssl", loss)
-        return loss
-
-    def configure_optimizers(self):
-        optim = torch.optim.SGD(
-            self.parameters(),
-            lr=6e-2,  #  no lr-scaling, results in better training stability
-            momentum=0.9,
-            weight_decay=5e-4,
-        )
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, max_epochs)
-        return [optim], [scheduler]
-
-
-class FastSiam(SimSiam):
-    def __init__(self, dataloader_kNN=None, num_classes=9, **kwargs):
-        super().__init__(dataloader_kNN, num_classes, **kwargs)
-
-    # Only the training_step is different
-    def training_step(self, batch, batch_idx):
-        views, _, _ = batch
-        features = [self.forward(view) for view in views]
-        zs = torch.stack([z for z, _ in features])
-        ps = torch.stack([p for _, p in features])
-
-        loss = 0.0
-        for i in range(len(views)):
-            mask = torch.arange(len(views), device=self.device) != i
-            loss += self.criterion(ps[i], torch.mean(zs[mask], dim=0)) / len(views)
-
-        self.log("train_loss_ssl", loss)
-        return loss
+# Redundancy Reduction
 
 
 class BarlowTwins(KNNBenchmarkModule):
@@ -398,7 +373,7 @@ class BarlowTwins(KNNBenchmarkModule):
         return z
 
     def training_step(self, batch, batch_index):
-        (x0, x1), _, _ = batch
+        (x0, x1), _ = batch
         z0 = self.forward(x0)
         z1 = self.forward(x1)
         loss = self.criterion(z0, z1)
@@ -416,6 +391,41 @@ class BarlowTwins(KNNBenchmarkModule):
         return [optim], [cosine_scheduler]
 
 
+class VICReg(KNNBenchmarkModule):
+    def __init__(self, dataloader_kNN=None, num_classes=9, **kwargs):
+        super().__init__(dataloader_kNN, num_classes, **kwargs)
+        # create a ResNet backbone and remove the classification head
+        self.backbone = timm.create_model("resnet18", num_classes=0, pretrained=False)
+        feature_dim = self.backbone.num_features
+        self.projection_head = heads.BarlowTwinsProjectionHead(feature_dim, 2048, 2048)
+        self.criterion = lightly.loss.VICRegLoss()
+        self.warmup_epochs = 40 if max_epochs >= 800 else 20
+
+    def forward(self, x):
+        x = self.backbone(x).flatten(start_dim=1)
+        z = self.projection_head(x)
+        self.log("rep_std", debug.std_of_l2_normalized(x))
+        return z
+
+    def training_step(self, batch, batch_index):
+        (x0, x1), _ = batch
+        z0 = self.forward(x0)
+        z1 = self.forward(x1)
+        loss = self.criterion(z0, z1)
+        self.log("train_loss_ssl", loss)
+        return loss
+
+    def configure_optimizers(self):
+        optim = Lars(
+            self.parameters(), lr=0.3 * lr_factor, weight_decay=1e-4, momentum=0.9
+        )
+        cosine_scheduler = scheduler.CosineWarmupScheduler(
+            optim, self.warmup_epochs, max_epochs
+        )
+        return [optim], [cosine_scheduler]
+
+
+# Self-Distillation
 class BYOL(KNNBenchmarkModule):
     def __init__(self, dataloader_kNN=None, num_classes=9, **kwargs):
         super().__init__(dataloader_kNN, num_classes, **kwargs)
@@ -453,7 +463,7 @@ class BYOL(KNNBenchmarkModule):
         utils.update_momentum(
             self.projection_head, self.projection_head_momentum, m=0.99
         )
-        (x0, x1), _, _ = batch
+        (x0, x1), _ = batch
         p0 = self.forward(x0)
         z0 = self.forward_momentum(x0)
         p1 = self.forward(x1)
@@ -511,7 +521,7 @@ class DINO(KNNBenchmarkModule):
     def training_step(self, batch, batch_idx):
         utils.update_momentum(self.backbone, self.teacher_backbone, m=0.99)
         utils.update_momentum(self.head, self.teacher_head, m=0.99)
-        views, _, _ = batch
+        views, _ = batch
         views = [view.to(self.device) for view in views]
         global_views = views[:2]
         teacher_out = [self.forward_teacher(view) for view in global_views]
@@ -568,7 +578,7 @@ class DINOViT(KNNBenchmarkModule):
     def training_step(self, batch, batch_idx):
         utils.update_momentum(self.backbone, self.teacher_backbone, m=0.99)
         utils.update_momentum(self.head, self.teacher_head, m=0.99)
-        views, _, _ = batch
+        views, _ = batch
         views = [view.to(self.device) for view in views]
         global_views = views[:2]
         teacher_out = [self.forward_teacher(view) for view in global_views]
@@ -592,241 +602,64 @@ class DINOViT(KNNBenchmarkModule):
         return [optim], [cosine_scheduler]
 
 
-class MAE(KNNBenchmarkModule):
+class SimSiam(KNNBenchmarkModule):
     def __init__(self, dataloader_kNN=None, num_classes=9, **kwargs):
         super().__init__(dataloader_kNN, num_classes, **kwargs)
+        # create a ResNet backbone and remove the classification head
+        self.backbone = timm.create_model("resnet18", num_classes=0, pretrained=False)
+        feature_dim = self.backbone.num_features
+        self.projection_head = heads.SimSiamProjectionHead(feature_dim, 2048, 2048)
+        self.prediction_head = heads.SimSiamPredictionHead(2048, 512, 2048)
+        self.criterion = lightly.loss.NegativeCosineSimilarity()
 
-        decoder_dim = 512
-        vit = torchvision.models.vit_b_32()
-
-        self.warmup_epochs = 40 if max_epochs >= 800 else 20
-        self.mask_ratio = 0.75
-        self.patch_size = vit.patch_size
-        self.sequence_length = vit.seq_length
-        self.mask_token = nn.Parameter(torch.zeros(1, 1, decoder_dim))
-        self.backbone = masked_autoencoder.MAEBackbone.from_vit(vit)
-        self.decoder = masked_autoencoder.MAEDecoder(
-            seq_length=vit.seq_length,
-            num_layers=1,
-            num_heads=16,
-            embed_input_dim=vit.hidden_dim,
-            hidden_dim=decoder_dim,
-            mlp_dim=decoder_dim * 4,
-            out_dim=vit.patch_size**2 * 3,
-            dropout=0,
-            attention_dropout=0,
-        )
-        self.criterion = nn.MSELoss()
-
-    def forward_encoder(self, images, idx_keep=None):
-        out = self.backbone.encode(images, idx_keep)
-        self.log("rep_std", debug.std_of_l2_normalized(out.flatten(1)))
-        return out
-
-    def forward_decoder(self, x_encoded, idx_keep, idx_mask):
-        # build decoder input
-        batch_size = x_encoded.shape[0]
-        x_decode = self.decoder.embed(x_encoded)
-        x_masked = utils.repeat_token(
-            self.mask_token, (batch_size, self.sequence_length)
-        )
-        x_masked = utils.set_at_index(x_masked, idx_keep, x_decode.type_as(x_masked))
-
-        # decoder forward pass
-        x_decoded = self.decoder.decode(x_masked)
-
-        # predict pixel values for masked tokens
-        x_pred = utils.get_at_index(x_decoded, idx_mask)
-        x_pred = self.decoder.predict(x_pred)
-        return x_pred
+    def forward(self, x):
+        f = self.backbone(x).flatten(start_dim=1)
+        z = self.projection_head(f)
+        p = self.prediction_head(z)
+        z = z.detach()
+        self.log("rep_std", debug.std_of_l2_normalized(f))
+        return z, p
 
     def training_step(self, batch, batch_idx):
-        images, _, _ = batch
-
-        batch_size = images.shape[0]
-        idx_keep, idx_mask = utils.random_token_mask(
-            size=(batch_size, self.sequence_length),
-            mask_ratio=self.mask_ratio,
-            device=images.device,
-        )
-        x_encoded = self.forward_encoder(images, idx_keep)
-        x_pred = self.forward_decoder(x_encoded, idx_keep, idx_mask)
-
-        # get image patches for masked tokens
-        patches = utils.patchify(images, self.patch_size)
-        # must adjust idx_mask for missing class token
-        target = utils.get_at_index(patches, idx_mask - 1)
-
-        loss = self.criterion(x_pred, target)
+        (x0, x1), _ = batch
+        z0, p0 = self.forward(x0)
+        z1, p1 = self.forward(x1)
+        loss = 0.5 * (self.criterion(z0, p1) + self.criterion(z1, p0))
         self.log("train_loss_ssl", loss)
         return loss
 
     def configure_optimizers(self):
-        optim = torch.optim.AdamW(
+        optim = torch.optim.SGD(
             self.parameters(),
-            lr=1.5e-4 * lr_factor,
-            weight_decay=0.05,
-            betas=(0.9, 0.95),
+            lr=6e-2,  #  no lr-scaling, results in better training stability
+            momentum=0.9,
+            weight_decay=5e-4,
         )
-        cosine_scheduler = scheduler.CosineWarmupScheduler(
-            optim, self.warmup_epochs, max_epochs
-        )
-        return [optim], [cosine_scheduler]
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, max_epochs)
+        return [optim], [scheduler]
 
 
-class MAE2(KNNBenchmarkModule):
+class FastSiam(SimSiam):
     def __init__(self, dataloader_kNN=None, num_classes=9, **kwargs):
         super().__init__(dataloader_kNN, num_classes, **kwargs)
 
-        decoder_dim = 512
-        vit = torchvision.models.vit_b_32()
-
-        self.warmup_epochs = 40 if max_epochs >= 800 else 20
-        self.mask_ratio = 0.75
-        self.patch_size = vit.patch_size
-        self.sequence_length = vit.seq_length
-        self.mask_token = nn.Parameter(torch.zeros(1, 1, decoder_dim))
-        self.backbone = masked_autoencoder.MAEBackbone.from_vit(vit)
-        self.decoder = masked_autoencoder.MAEDecoder(
-            seq_length=vit.seq_length,
-            num_layers=1,
-            num_heads=16,
-            embed_input_dim=vit.hidden_dim,
-            hidden_dim=decoder_dim,
-            mlp_dim=decoder_dim * 4,
-            out_dim=vit.patch_size**2 * 3,
-            dropout=0,
-            attention_dropout=0,
-        )
-        self.criterion = nn.MSELoss()
-
-    def forward_encoder(self, images, idx_keep=None):
-        out = self.backbone.encode(images, idx_keep)
-        self.log("rep_std", debug.std_of_l2_normalized(out.flatten(1)))
-        return out
-
-    def forward_decoder(self, x_encoded, idx_keep, idx_mask):
-        # build decoder input
-        batch_size = x_encoded.shape[0]
-        x_decode = self.decoder.embed(x_encoded)
-        x_masked = utils.repeat_token(
-            self.mask_token, (batch_size, self.sequence_length)
-        )
-        x_masked = utils.set_at_index(x_masked, idx_keep, x_decode.type_as(x_masked))
-
-        # decoder forward pass
-        x_decoded = self.decoder.decode(x_masked)
-
-        # predict pixel values for masked tokens
-        x_pred = utils.get_at_index(x_decoded, idx_mask)
-        x_pred = self.decoder.predict(x_pred)
-        return x_pred
-
+    # Only the training_step is different
     def training_step(self, batch, batch_idx):
-        images, _, _ = batch
+        views, _ = batch
+        features = [self.forward(view) for view in views]
+        zs = torch.stack([z for z, _ in features])
+        ps = torch.stack([p for _, p in features])
 
-        batch_size = images.shape[0]
-        idx_keep, idx_mask = utils.random_token_mask(
-            size=(batch_size, self.sequence_length),
-            mask_ratio=self.mask_ratio,
-            device=images.device,
-        )
-        x_encoded = self.forward_encoder(images, idx_keep)
-        x_pred = self.forward_decoder(x_encoded, idx_keep, idx_mask)
+        loss = 0.0
+        for i in range(len(views)):
+            mask = torch.arange(len(views), device=self.device) != i
+            loss += self.criterion(ps[i], torch.mean(zs[mask], dim=0)) / len(views)
 
-        # get image patches for masked tokens
-        patches = utils.patchify(images, self.patch_size)
-        # must adjust idx_mask for missing class token
-        target = utils.get_at_index(patches, idx_mask - 1)
-
-        loss = self.criterion(x_pred, target)
         self.log("train_loss_ssl", loss)
         return loss
 
-    def configure_optimizers(self):
-        optim = torch.optim.AdamW(
-            self.parameters(),
-            lr=1.5e-4 * lr_factor,
-            weight_decay=0.05,
-            betas=(0.9, 0.95),
-        )
-        cosine_scheduler = scheduler.CosineWarmupScheduler(
-            optim, self.warmup_epochs, max_epochs
-        )
-        return [optim], [cosine_scheduler]
 
-
-class SimMIM(KNNBenchmarkModule):
-    def __init__(self, dataloader_kNN=None, num_classes=9, **kwargs):
-        super().__init__(dataloader_kNN, num_classes, **kwargs)
-
-        vit = torchvision.models.vit_b_32()
-        self.warmup_epochs = 40 if max_epochs >= 800 else 20
-        decoder_dim = vit.hidden_dim
-        self.mask_ratio = 0.75
-        self.patch_size = vit.patch_size
-        self.sequence_length = vit.seq_length
-        self.mask_token = nn.Parameter(torch.zeros(1, 1, decoder_dim))
-
-        # same backbone as MAE
-        self.backbone = masked_autoencoder.MAEBackbone.from_vit(vit)
-
-        # the decoder is a simple linear layer
-        self.decoder = nn.Linear(vit.hidden_dim, vit.patch_size**2 * 3)
-
-        # L1 loss as paper suggestion
-        self.criterion = nn.L1Loss()
-
-    def forward_encoder(self, images, batch_size, idx_mask):
-        # pass all the tokens to the encoder, both masked and non masked ones
-        tokens = self.backbone.images_to_tokens(images, prepend_class_token=True)
-        tokens_masked = utils.mask_at_index(tokens, idx_mask, self.mask_token)
-        # self.log("rep_std", debug.std_of_l2_normalized(out.flatten(1)))
-        return self.backbone.encoder(tokens_masked)
-
-    def forward_decoder(self, x_encoded):
-        return self.decoder(x_encoded)
-
-    def training_step(self, batch, batch_idx):
-        images, _, _ = batch
-
-        batch_size = images.shape[0]
-        idx_keep, idx_mask = utils.random_token_mask(
-            size=(batch_size, self.sequence_length),
-            mask_ratio=self.mask_ratio,
-            device=images.device,
-        )
-
-        # Encoding...
-        x_encoded = self.forward_encoder(images, batch_size, idx_mask)
-        x_encoded_masked = utils.get_at_index(x_encoded, idx_mask)
-
-        # Decoding...
-        x_out = self.forward_decoder(x_encoded_masked)
-
-        # get image patches for masked tokens
-        patches = utils.patchify(images, self.patch_size)
-
-        # must adjust idx_mask for missing class token
-        target = utils.get_at_index(patches, idx_mask - 1)
-
-        loss = self.criterion(x_out, target)
-        self.log("train_loss_ssl", loss)
-        return loss
-
-    def configure_optimizers(self):
-        optim = torch.optim.AdamW(
-            self.parameters(),
-            lr=8e-4 * lr_factor,
-            weight_decay=0.05,
-            betas=(0.9, 0.999),
-        )
-        cosine_scheduler = scheduler.CosineWarmupScheduler(
-            optim, self.warmup_epochs, max_epochs
-        )
-        return [optim], [cosine_scheduler]
-
-
+# Mask Denoising
 class MSN(KNNBenchmarkModule):
     def __init__(self, dataloader_kNN=None, num_classes=9, **kwargs):
         super().__init__(dataloader_kNN, num_classes, **kwargs)
@@ -858,7 +691,7 @@ class MSN(KNNBenchmarkModule):
         utils.update_momentum(self.anchor_backbone, self.backbone, 0.996)
         utils.update_momentum(self.anchor_projection_head, self.projection_head, 0.996)
 
-        views, _, _ = batch
+        views, _ = batch
         views = [view.to(self.device, non_blocking=True) for view in views]
         targets = views[0]
         anchors = views[1]
@@ -938,7 +771,7 @@ class PMSN(KNNBenchmarkModule):
         utils.update_momentum(self.anchor_backbone, self.backbone, 0.996)
         utils.update_momentum(self.anchor_projection_head, self.projection_head, 0.996)
 
-        views, _, _ = batch
+        views, _ = batch
         views = [view.to(self.device, non_blocking=True) for view in views]
         targets = views[0]
         anchors = views[1]
@@ -987,6 +820,7 @@ class PMSN(KNNBenchmarkModule):
         return [optim], [cosine_scheduler]
 
 
+# Clustering
 class SwaV(KNNBenchmarkModule):
     def __init__(self, dataloader_kNN=None, num_classes=9, **kwargs):
         super().__init__(dataloader_kNN, num_classes, **kwargs)
@@ -1015,7 +849,7 @@ class SwaV(KNNBenchmarkModule):
         # the multi-crop dataloader returns a list of image crops where the
         # first two items are the high resolution crops and the rest are low
         # resolution crops
-        multi_crops, _, _ = batch
+        multi_crops, _ = batch
         multi_crop_features = [self.forward(x) for x in multi_crops]
 
         # split list of crop features into high and low resolution
@@ -1038,64 +872,157 @@ class SwaV(KNNBenchmarkModule):
         return [optim], [scheduler]
 
 
-class DCLW(KNNBenchmarkModule):
+# Masked Image Modeling
+class MAE(KNNBenchmarkModule):
     def __init__(self, dataloader_kNN=None, num_classes=9, **kwargs):
         super().__init__(dataloader_kNN, num_classes, **kwargs)
-        # create a ResNet backbone and remove the classification head
-        self.backbone = timm.create_model("resnet18", num_classes=0, pretrained=False)
-        feature_dim = self.backbone.num_features
-        self.projection_head = heads.SimCLRProjectionHead(feature_dim, feature_dim, 128)
-        self.criterion = lightly.loss.DCLWLoss()
 
-    def forward(self, x):
-        x = self.backbone(x).flatten(start_dim=1)
-        z = self.projection_head(x)
-        self.log("rep_std", debug.std_of_l2_normalized(x))
-        return z
+        decoder_dim = 512
+        vit = torchvision.models.vit_b_32()
 
-    def training_step(self, batch, batch_index):
-        (x0, x1), _, _ = batch
-        z0 = self.forward(x0)
-        z1 = self.forward(x1)
-        loss = self.criterion(z0, z1)
-        self.log("train_loss_ssl", loss)
-        return loss
-
-    def configure_optimizers(self):
-        optim = torch.optim.SGD(
-            self.parameters(), lr=6e-2 * lr_factor, momentum=0.9, weight_decay=5e-4
-        )
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, max_epochs)
-        return [optim], [scheduler]
-
-
-class VICReg(KNNBenchmarkModule):
-    def __init__(self, dataloader_kNN=None, num_classes=9, **kwargs):
-        super().__init__(dataloader_kNN, num_classes, **kwargs)
-        # create a ResNet backbone and remove the classification head
-        self.backbone = timm.create_model("resnet18", num_classes=0, pretrained=False)
-        feature_dim = self.backbone.num_features
-        self.projection_head = heads.BarlowTwinsProjectionHead(feature_dim, 2048, 2048)
-        self.criterion = lightly.loss.VICRegLoss()
         self.warmup_epochs = 40 if max_epochs >= 800 else 20
+        self.mask_ratio = 0.75
+        self.patch_size = vit.patch_size
+        self.sequence_length = vit.seq_length
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, decoder_dim))
+        self.backbone = masked_autoencoder.MAEBackbone.from_vit(vit)
+        self.decoder = masked_autoencoder.MAEDecoder(
+            seq_length=vit.seq_length,
+            num_layers=1,
+            num_heads=16,
+            embed_input_dim=vit.hidden_dim,
+            hidden_dim=decoder_dim,
+            mlp_dim=decoder_dim * 4,
+            out_dim=vit.patch_size**2 * 3,
+            dropout=0,
+            attention_dropout=0,
+        )
+        self.criterion = nn.MSELoss()
 
-    def forward(self, x):
-        x = self.backbone(x).flatten(start_dim=1)
-        z = self.projection_head(x)
-        self.log("rep_std", debug.std_of_l2_normalized(x))
-        return z
+    def forward_encoder(self, images, idx_keep=None):
+        out = self.backbone.encode(images, idx_keep)
+        self.log("rep_std", debug.std_of_l2_normalized(out.flatten(1)))
+        return out
 
-    def training_step(self, batch, batch_index):
-        (x0, x1), _, _ = batch
-        z0 = self.forward(x0)
-        z1 = self.forward(x1)
-        loss = self.criterion(z0, z1)
+    def forward_decoder(self, x_encoded, idx_keep, idx_mask):
+        # build decoder input
+        batch_size = x_encoded.shape[0]
+        x_decode = self.decoder.embed(x_encoded)
+        x_masked = utils.repeat_token(
+            self.mask_token, (batch_size, self.sequence_length)
+        )
+        x_masked = utils.set_at_index(x_masked, idx_keep, x_decode.type_as(x_masked))
+
+        # decoder forward pass
+        x_decoded = self.decoder.decode(x_masked)
+
+        # predict pixel values for masked tokens
+        x_pred = utils.get_at_index(x_decoded, idx_mask)
+        x_pred = self.decoder.predict(x_pred)
+        return x_pred
+
+    def training_step(self, batch, batch_idx):
+        images, _ = batch
+        # BaseTransform returns a list of transformed images; in this case, we only have one view
+        images = images[0]
+
+        batch_size = images.shape[0]
+        idx_keep, idx_mask = utils.random_token_mask(
+            size=(batch_size, self.sequence_length),
+            mask_ratio=self.mask_ratio,
+            device=images.device,
+        )
+        x_encoded = self.forward_encoder(images, idx_keep)
+        x_pred = self.forward_decoder(x_encoded, idx_keep, idx_mask)
+
+        # get image patches for masked tokens
+        patches = utils.patchify(images, self.patch_size)
+        # must adjust idx_mask for missing class token
+        target = utils.get_at_index(patches, idx_mask - 1)
+
+        loss = self.criterion(x_pred, target)
         self.log("train_loss_ssl", loss)
         return loss
 
     def configure_optimizers(self):
-        optim = Lars(
-            self.parameters(), lr=0.3 * lr_factor, weight_decay=1e-4, momentum=0.9
+        optim = torch.optim.AdamW(
+            self.parameters(),
+            lr=1.5e-4 * lr_factor,
+            weight_decay=0.05,
+            betas=(0.9, 0.95),
+        )
+        cosine_scheduler = scheduler.CosineWarmupScheduler(
+            optim, self.warmup_epochs, max_epochs
+        )
+        return [optim], [cosine_scheduler]
+
+
+class SimMIM(KNNBenchmarkModule):
+    def __init__(self, dataloader_kNN=None, num_classes=9, **kwargs):
+        super().__init__(dataloader_kNN, num_classes, **kwargs)
+
+        vit = torchvision.models.vit_b_32()
+        self.warmup_epochs = 40 if max_epochs >= 800 else 20
+        decoder_dim = vit.hidden_dim
+        self.mask_ratio = 0.75
+        self.patch_size = vit.patch_size
+        self.sequence_length = vit.seq_length
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, decoder_dim))
+
+        # same backbone as MAE
+        self.backbone = masked_autoencoder.MAEBackbone.from_vit(vit)
+
+        # the decoder is a simple linear layer
+        self.decoder = nn.Linear(vit.hidden_dim, vit.patch_size**2 * 3)
+
+        # L1 loss as paper suggestion
+        self.criterion = nn.L1Loss()
+
+    def forward_encoder(self, images, batch_size, idx_mask):
+        # pass all the tokens to the encoder, both masked and non masked ones
+        tokens = self.backbone.images_to_tokens(images, prepend_class_token=True)
+        tokens_masked = utils.mask_at_index(tokens, idx_mask, self.mask_token)
+        # self.log("rep_std", debug.std_of_l2_normalized(out.flatten(1)))
+        return self.backbone.encoder(tokens_masked)
+
+    def forward_decoder(self, x_encoded):
+        return self.decoder(x_encoded)
+
+    def training_step(self, batch, batch_idx):
+        images, _ = batch
+        # BaseTransform returns a list of transformed images; in this case, we only have one view
+        images = images[0]
+
+        batch_size = images.shape[0]
+        idx_keep, idx_mask = utils.random_token_mask(
+            size=(batch_size, self.sequence_length),
+            mask_ratio=self.mask_ratio,
+            device=images.device,
+        )
+
+        # Encoding...
+        x_encoded = self.forward_encoder(images, batch_size, idx_mask)
+        x_encoded_masked = utils.get_at_index(x_encoded, idx_mask)
+
+        # Decoding...
+        x_out = self.forward_decoder(x_encoded_masked)
+
+        # get image patches for masked tokens
+        patches = utils.patchify(images, self.patch_size)
+
+        # must adjust idx_mask for missing class token
+        target = utils.get_at_index(patches, idx_mask - 1)
+
+        loss = self.criterion(x_out, target)
+        self.log("train_loss_ssl", loss)
+        return loss
+
+    def configure_optimizers(self):
+        optim = torch.optim.AdamW(
+            self.parameters(),
+            lr=8e-4 * lr_factor,
+            weight_decay=0.05,
+            betas=(0.9, 0.999),
         )
         cosine_scheduler = scheduler.CosineWarmupScheduler(
             optim, self.warmup_epochs, max_epochs
@@ -1105,30 +1032,29 @@ class VICReg(KNNBenchmarkModule):
 
 def main():
     models = [
-        # BYOL,
         # Contrastive Learning
-        # SimCLR,
-        # MoCo,
-        # DCLW,
+        SimCLR,
+        MoCo,
+        DCLW,
         # Clustering
-        # SwaV,
-        # Distillation
-        # DINO,
-        # DINOViT,
+        SwaV,
+        # Self-Distillation
+        BYOL,
+        SimSiam,
+        FastSiam,
+        DINO,
+        DINOViT,
         # Redundancy Reduction
         VICReg,
-        # BarlowTwins,
+        BarlowTwins,
         # Mask Denoising
-        # MSN,
-        # PMSN,
+        MSN,
+        PMSN,
         # Masked Image Modeling
-        # MAE,
-        # MAE2,  # Same as MAE but with all transforms
-        # SimMIM,
+        MAE,
+        SimMIM,
         # Supervised
-        # SupervisedR18,
-        # SimSiam,
-        # FastSiam,
+        SupervisedR18,
     ]
     bench_results = dict()
 
@@ -1139,13 +1065,13 @@ def main():
         model_name = Benchmark.__name__.replace("", "")
         for seed in range(n_runs):
             pl.seed_everything(seed)
+            dataset_train_ssl = create_dataset_train_ssl(Benchmark)
             (
                 dataloader_train_ssl,
                 dataloader_train_kNN,
                 dataloader_test,
             ) = get_data_loaders(
-                batch_size=batch_size,
-                model=Benchmark,
+                batch_size=batch_size, dataset_train_ssl=dataset_train_ssl
             )
             benchmark_model = Benchmark(
                 dataloader_train_kNN, classes, knn_k=knn_k, knn_t=knn_t
@@ -1189,7 +1115,7 @@ def main():
             end = time.time()
             run = {
                 "model": model_name,
-                "batch_size": dataloader_train_ssl.batch_size,  # batch_size of the dataloader, not the global batch size
+                "batch_size": dataloader_train_ssl.batch_size,
                 "epochs": trainer.current_epoch,
                 "params": sum(
                     p.numel() for p in benchmark_model.parameters() if p.requires_grad
@@ -1265,6 +1191,4 @@ def main():
 # Use a __main__ guard to prevent spawning of multiple processes
 # And set pin_memory=True and persistent_workers=True
 if __name__ == "__main__":
-    # multiprocessing.set_start_method("spawn", True)
-    # multiprocessing.freeze_support()
     main()

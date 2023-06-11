@@ -329,10 +329,7 @@ def get_base_transforms(
     if normalize:
         transforms.append(T.Normalize(**NORMALIZE_STATS))
 
-    if as_list:
-        return transforms
-    else:
-        return T.Compose(transforms)
+    return T.Compose(transforms)
 
 
 def get_inference_transforms(img_size: List[int] = [224, 224], normalize: bool = True):
